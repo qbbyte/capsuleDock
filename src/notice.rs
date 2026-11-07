@@ -7,9 +7,8 @@
 //!
 //! ## 为什么只搬「队列逻辑」、不搬「收发入口」
 //!
-//! 收发入口（`alert` / `bluetooth_alert` / `receive_notification` /
-//! `receive_wechat_reminder`）每个都要读 5–7 个 settings 字段、`pending` 命令队列、
-//! 信使状态和当前时刻——它们本质是「协调设置 → 构造告警 → 决定是否转发系统」的
+//! 收发入口（`alert` / `bluetooth_alert`）每个都要读若干 settings 字段、`pending`
+//! 命令队列和当前时刻——它们本质是「协调设置 → 构造告警 → 决定是否转发系统」的
 //! **编排逻辑**，属于 `App`。把编排搬进本模块会让 `NoticeInputs` 长成十几个字段的
 //! 胖接口，反而降低内聚、抬高耦合。因此本模块只暴露窄接口 [`NoticeStack::enqueue`]，
 //! `App` 在入口里构造好 [`Alert`] 后喂进来。
@@ -127,34 +126,8 @@ impl NoticeStack {
         }
     }
 
-    /// 重新对队列中所有告警套用一次「预览设置」：当关闭通知内容预览时，
-    /// 把外部来源的正文替换为占位文案。`App` 在设置变化或每帧按需调用。
-    pub(crate) fn apply_preview_policy(&mut self, show_preview: bool) {
-        if show_preview {
-            return;
-        }
-        for a in self.alerts.iter_mut().chain(self.notice.iter_mut()).chain(self.hud_notice.iter_mut()) {
-            if matches!(&a.source, AlertSource::External(_)) {
-                a.body = "收到新通知 · 内容已隐藏".into();
-            }
-        }
-    }
-
-    /// 清掉某信使来源的全部告警（用户已查看该来源所有账号时调用）。
-    pub(crate) fn clear_for_messenger(&mut self, source: crate::app::Messenger) {
-        self.alerts.retain(|a| a.messenger() != Some(source));
-        if self.notice.as_ref().is_some_and(|a| a.messenger() == Some(source)) {
-            self.notice = None;
-            self.notification_bell_until = 0.0;
-        }
-    }
-
-    /// 当前展示中的告警是否属于某信使来源（供 `App` 计算 compact 横幅时用）。
-    pub(crate) fn current_is_messenger(&self) -> bool {
-        self.notice.as_ref().is_some_and(|a| a.messenger().is_some())
-    }
-
     /// 触发铃铛计时窗口：通知到达后的 `duration` 秒内坞体显示铃铛动画。
+    #[allow(dead_code)]
     pub(crate) fn ring_bell(&mut self, at: f64, duration: f64) {
         self.notification_bell_at = at;
         self.notification_bell_until = at + duration;
@@ -175,7 +148,6 @@ pub(crate) fn notice_size(a: &Alert, hud_w: f32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Messenger;
 
     fn alert(title: &str) -> Alert {
         Alert {
@@ -205,7 +177,7 @@ mod tests {
         let mut s2 = NoticeStack::new();
         for i in 0..12 {
             s2.enqueue(
-                Alert { title: format!("X{i}"), source: AlertSource::External("app".into()), body: "b".into(), page: 0, at: 0.0, duration: 4.0, bluetooth: None },
+                Alert { title: format!("X{i}"), source: AlertSource::Internal, body: "b".into(), page: 0, at: 0.0, duration: 4.0, bluetooth: None },
                 false,
                 &enabled(),
             );
@@ -232,31 +204,16 @@ mod tests {
         s.tick(6.0, |_| true);
         assert!(s.notice.is_none(), "到期应被清掉");
         // 不被 allowed 的告警应被过滤。
-        s.enqueue(Alert { title: "QQ".into(), source: AlertSource::External("QQ".into()), body: "".into(), page: 0, at: 0.0, duration: 5.0, bluetooth: None }, false, &enabled());
-        s.tick(0.0, |a| !matches!(&a.source, AlertSource::External(_)));
-        assert!(s.alerts.is_empty(), "不允许的来源应被过滤掉");
+        s.enqueue(Alert { title: "T2".into(), source: AlertSource::Internal, body: "".into(), page: 0, at: 0.0, duration: 5.0, bluetooth: None }, false, &enabled());
+        s.tick(0.0, |_| false);
+        assert!(s.alerts.is_empty(), "不允许的告警应被过滤掉");
     }
 
     #[test]
-    fn clear_for_messenger_drops_that_source() {
+    fn ring_bell_sets_window() {
         let mut s = NoticeStack::new();
-        s.enqueue(Alert { title: "微信".into(), source: AlertSource::Wechat, body: "x".into(), page: 0, at: 0.0, duration: 4.0, bluetooth: None }, false, &enabled());
-        s.tick(0.0, |_| true);
-        assert!(s.notice.as_ref().is_some_and(|a| a.messenger() == Some(Messenger::Wechat)));
-        s.clear_for_messenger(Messenger::Wechat);
-        assert!(s.notice.is_none(), "清信使时应连带清当前告警并停铃铛");
-        assert_eq!(s.notification_bell_until, 0.0);
-    }
-
-    #[test]
-    fn apply_preview_masks_external_bodies() {
-        let mut s = NoticeStack::new();
-        s.enqueue(Alert { title: "A".into(), source: AlertSource::External("app".into()), body: "secret".into(), page: 0, at: 0.0, duration: 4.0, bluetooth: None }, false, &enabled());
-        s.tick(0.0, |_| true);
-        s.apply_preview_policy(false);
-        assert_eq!(s.notice.as_ref().unwrap().body, "收到新通知 · 内容已隐藏");
-        // 开启预览时不动。
-        s.apply_preview_policy(true);
-        assert_eq!(s.notice.as_ref().unwrap().body, "收到新通知 · 内容已隐藏");
+        s.ring_bell(10.0, 3.0);
+        assert_eq!(s.notification_bell_at, 10.0);
+        assert_eq!(s.notification_bell_until, 13.0);
     }
 }

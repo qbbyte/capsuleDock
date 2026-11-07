@@ -46,14 +46,14 @@ fn v0649_settings_survive_upgrade(){
     std::fs::create_dir_all(&directory).unwrap();
     let legacy=concat!("settings_theme=dark\npet=0\nminimal=1\nbrowser_minimal=1\n",
         "visible_pages=10111111\npage_order=5,2,0,1,3,4,6,7\nshow_battery=0\n",
-        "system_hud=0\nread_notifications=1\nnotifications=0\nsound=1\n",
+        "system_hud=0\nnotifications=0\nsound=1\n",
         "lyrics_enabled=0\nisland_lyrics=1\nlyric_delay_ms=-650\nhide_fullscreen=0\n",
         "focus_minutes=45\nrest_minutes=10\n");
     std::fs::write(directory.join("settings.txt"),legacy).unwrap();
     let upgraded=crate::model::Settings::load();
     assert!(upgraded.display_id.is_empty() && upgraded.avoid_apps.is_empty());
     assert!(upgraded.avoid_browsers && upgraded.bluetooth_notifications);
-    assert!(!upgraded.clock_12h && !upgraded.notification_preview);
+    assert!(!upgraded.clock_12h);
     assert_eq!(upgraded.clock_period,0);
     // 旧页面布局升级：饮水(2)、邮箱(5)、AI 额度(6)、日程(7) 都已下线，只保留 音乐／专注／置物／待办。
     assert_eq!(upgraded.visible_pages,[true,false,true,true]);
@@ -1635,15 +1635,6 @@ fn repeated_system_changes_merge_without_losing_history(){
     assert_eq!(h.app.notices.notice.as_ref().unwrap().body,"音量 30%");assert_eq!(h.app.notices.history.len(),2);assert!(h.app.notices.alerts.is_empty());
 }
 #[test]
-fn windows_notification_echo_does_not_duplicate_own_reminders(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
-    h.app.alert("喝水时间到了","喝点水吧",2,true);
-    h.app.settings.read_notifications=true;h.app.receive_notification("Windows 通知".into(),"test".into(),"喝水时间到了 · 喝点水吧".into());assert_eq!(h.app.notices.history.len(),1);
-    assert_eq!(h.app.notices.alerts.len(),1,"胶囊坞发出的系统通知不能再次进入坞内通知队列");
-    h.app.notification_apps.items.push(("mail".into(),"邮件".into(),true));h.app.receive_notification("邮件".into(),"mail".into(),"收到一封新邮件".into());assert_eq!(h.app.notices.alerts.len(),2);assert!(h.app.notices.notification_bell_until>h.app.t);
-}
-
-#[test]
 fn minimal_takes_precedence_over_mascot(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.app.settings.pet=true;h.app.settings.minimal=true;
     for _ in 0..120 {h.frame(vec![]);}assert!(h.region.height()<20.0,"启用极简和吉祥物时必须显示细线");
@@ -1812,18 +1803,6 @@ fn collapsed_focus_animates_without_music_or_mascot_and_stops_in_minimal_mode(){
     assert!(!h.animating,"极简细线隐藏计时图标后，应停止其动画刷新");
 }
 #[test]
-fn app_notifications_show_temporary_bell_in_minimal_mode(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.app.settings.minimal=true;h.frame(vec![]);
-    h.app.settings.read_notifications=true;h.app.receive_notification("邮件".into(),"mail.app".into(),"私人内容".into());
-    assert!(h.app.notification_apps.items[0].2);assert!(h.app.notices.notification_bell_until>h.app.t);assert_eq!(h.app.notices.alerts.len(),1);
-    assert!(!std::fs::read_to_string(crate::model::config_dir().join("notification-apps.json")).unwrap().contains("私人内容"));
-    for _ in 0..90 {h.frame(vec![]);}assert!(h.region.height()>20.0,"极简模式收到通知时应临时展开");
-    h.t+=5.0;for _ in 0..90 {h.frame(vec![]);}assert!(h.region.height()<20.0,"铃铛消失后应恢复极简模式");
-    h.app.notification_apps.items[0].2=false;let until=h.app.notices.notification_bell_until;
-    h.app.settings.read_notifications=true;h.app.receive_notification("邮件".into(),"mail.app".into(),"私人内容".into());assert_eq!(h.app.notices.notification_bell_until,until);
-}
-
-#[test]
 fn fluid_music_seek_draws_solid_played_segment(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     for lyrics in [false,true] {
@@ -1986,95 +1965,6 @@ fn display_choice_saves_and_keeps_disconnected_selection(){
 }
 
 #[test]
-fn closing_app_notification_clears_its_bell_and_keeps_queued_messages(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    for lyrics in [false,true]{
-        let mut h=H::new();h.app.settings.island_lyrics=lyrics;h.app.settings.read_notifications=true;h.app.settings.notification_preview=true;
-        if lyrics {
-            h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,position:7.0,duration:120.0,..Default::default()};
-            h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]晚风吹过了山岗"));
-        }
-        for _ in 0..60{h.frame(vec![]);}
-        h.app.receive_notification("测试消息".into(),"notice.test".into(),"第一条消息".into());
-        for _ in 0..60{h.frame(vec![]);}
-        let bell=h.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Path(p)if p.points.len()==17=>Some(p.visual_bounding_rect().center()),_=>None}).unwrap();
-        let close=h.ctx.read_response(egui::Id::new(("card",true,"external-dismiss"))).unwrap().rect;
-        assert!(bell.x>close.right(),"通知铃铛应位于坞内最右侧");
-        h.app.receive_notification("测试消息".into(),"notice.test".into(),"第二条消息".into());
-        h.click(close.center());
-        assert!(h.app.notices.notice.is_none());assert!(h.app.notices.notification_bell_until<=h.t,"关闭正文也应结束铃铛提醒");
-        h.frame(vec![]);assert_eq!(h.app.notices.notice.as_ref().unwrap().body,"第二条消息");
-        for _ in 0..30{h.frame(vec![]);}
-        h.click_text("关闭");h.cursor=None;
-        for _ in 0..60{h.frame(vec![]);}
-        assert!(h.app.notices.notice.is_none());assert!(h.app.notices.hud_notice.is_none());
-        assert!(!h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Circle(c)if c.fill==egui::Color32::from_rgb(255,72,72))),"关闭后不能残留铃铛红点");
-    }
-}
-
-#[test]
-fn lyric_app_notification_respects_preview_and_restores_current_lyrics(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    for preview in [false,true]{
-        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.read_notifications=true;h.app.settings.notification_preview=preview;
-        h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,position:7.0,duration:120.0,..Default::default()};
-        h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]首句歌词\n[00:20]后续歌词"));
-        for _ in 0..60{h.frame(vec![]);}
-        h.app.receive_notification("测试消息".into(),"notice.test".into(),"下午一起开会".into());
-        h.frame(vec![]);let at=h.app.notices.notice.as_ref().unwrap().at;
-        let mut slopes=Vec::new();
-        for elapsed in [0.35,0.60,1.0]{
-            h.t=at+elapsed;h.frame(vec![]);
-            let slope=h.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Path(p)if p.points.len()==17=>Some(p.points[13].y-p.points[16].y),_=>None}).expect("应绘制通知铃铛");
-            slopes.push(slope);
-        }
-        assert!(slopes[0]*slopes[1]<0.0,"铃铛应向左右两个方向摆动");assert!(slopes[2].abs()<0.01,"摆动结束后应回正");
-        for _ in 0..60{h.frame(vec![]);}
-        let visible=|h:&H,label:&str|h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text()==label&&t.opacity_factor>0.9&&s.clip_rect.contains_rect(t.visual_bounding_rect())));
-        assert_eq!(visible(&h,"下午一起开会"),preview);
-        assert_eq!(visible(&h,"首句歌词"),!preview);
-        assert_eq!(h.app.compact_notices(),!preview);
-        assert!(h.region.height()<70.0,"通知应留在坞内，不能自动弹出下方卡片");
-        assert!(!h.app.morph.open);
-        if !preview {assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Circle(c)if c.fill==egui::Color32::from_rgb(255,72,72))),"通知铃铛应有红点");}
-        let active=h.app.notices.notice.as_ref().unwrap();h.t=active.at+active.duration-0.1;h.media.position=25.0;
-        h.frame(vec![]);assert!(h.app.notices.notice.is_some());
-        for _ in 0..90{
-            h.frame(vec![]);
-            if h.app.notices.notice.is_none(){assert!(!visible(&h,"Track")&&!visible(&h,"Artist"),"恢复歌词不能闪出播放器");}
-        }
-        assert!(h.app.notices.notice.is_none());assert!(!visible(&h,"下午一起开会"));assert!(visible(&h,"后续歌词"));
-    }
-}
-
-#[test]
-#[ignore="按需导出歌词模式下正文开关的通知画面"]
-fn lyric_app_notification_gallery(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let dest=std::path::PathBuf::from(std::env::var_os("CAPSULEDOCK_APP_NOTICE_PREVIEW").expect("需指定预览目录"));std::fs::create_dir_all(&dest).unwrap();
-    for preview in [false,true]{
-        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.read_notifications=true;h.app.settings.notification_preview=preview;
-        h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,position:7.0,duration:120.0,..Default::default()};
-        h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]晚风吹过了山岗"));
-        let mut raster=crate::preview_raster::Raster::new(1440,405);
-        for frame in 0..90{
-            if frame==30{h.app.receive_notification("微信".into(),"wechat.preview".into(),"下午三点开会，记得带上电脑".into());}
-            let t=frame as f64/60.0;
-            let env=Env{t,clock:"09:41:00".into(),media:h.media.clone(),..Default::default()};
-            let raw=egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(crate::app::CANVAS_W,WIN_H))),time:Some(t),viewports:std::iter::once((egui::ViewportId::ROOT,egui::ViewportInfo{native_pixels_per_point:Some(1.5),..Default::default()})).collect(),..Default::default()};
-            let output=h.ctx.run(raw,|ctx|{egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx,|ui|{h.app.frame(ui,Rect::from_min_size(Pos2::ZERO,Vec2::new(WIN_W,WIN_H)),&env);});});
-            raster.update_textures(&output.textures_delta);
-            if frame==89{
-                raster.buf.fill([0.94,0.95,0.97,1.0]);raster.draw(&h.ctx.tessellate(output.shapes,output.pixels_per_point),output.pixels_per_point);
-                let mut rgba=Vec::new();raster.to_rgba8(&mut rgba);let image=image::RgbaImage::from_raw(1440,405,rgba).unwrap();
-                image::imageops::crop_imm(&image,105,0,960,150).to_image().save(dest.join(if preview{"正文开启.png"}else{"正文关闭.png"})).unwrap();
-            }
-            raster.free_textures(&output.textures_delta);
-        }
-    }
-}
-
-#[test]
 fn full_notifications_return_when_island_lyrics_are_not_visible(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     for (lyrics,music) in [(false,false),(false,true),(true,false)]{
@@ -2149,8 +2039,6 @@ fn an_open_page_and_lyrics_can_coexist_with_notifications_and_the_bell(){
     h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,position:7.0,duration:120.0,..Default::default()};
     h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]晚风吹过了山岗\n[01:00]下一句"));
     for _ in 0..90{h.frame(vec![]);}
-    h.app.notification_apps.items.push(("mail.test".into(),"邮件".into(),true));h.app.settings.read_notifications=true;h.app.receive_notification("邮件".into(),"mail.test".into(),"收到新邮件".into());h.frame(vec![]);
-    assert!(h.app.island_lyric().is_some(),"通知铃铛不能关闭坞上歌词");
     h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);h.hover(H::local(300.0,60.0),0.5);assert!(h.app.morph.open);
     h.app.alert("键盘输入语言","中文",5,false);for _ in 0..60{h.frame(vec![]);}
     assert!(h.app.morph.open);
@@ -2288,20 +2176,12 @@ fn todo_notice_view_locates_the_reminded_task() {
 }
 
 #[test]
-fn new_notification_sways_twice_then_stops_and_restarts_on_the_next_one() {
+fn notification_bell_sways_twice_then_returns_to_rest() {
     for (i,expected_positive) in [true,false,true,false].into_iter().enumerate(){
         let angle=crate::paint::bell_swing(0.95*(i as f64*0.25+0.125));
         assert_eq!(angle>0.0,expected_positive);
     }
     assert_eq!(crate::paint::bell_swing(1.0),0.0);
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
-    h.app.settings.read_notifications=true;h.app.receive_notification("微信".into(),"wechat".into(),"第一条".into());
-    let first=h.app.notices.notification_bell_at;
-    for _ in 0..90{h.frame(vec![]);}
-    h.app.settings.read_notifications=true;h.app.receive_notification("微信".into(),"wechat".into(),"第二条".into());
-    assert!(h.app.notices.notification_bell_at>first+1.0);
-    h.frame(vec![]);
-    assert!(h.app.notices.notification_bell_until>h.t);
 }
 
 #[test]
@@ -2741,45 +2621,6 @@ fn settings_theme_follows_system_and_preserves_island_style() {
 }
 
 #[test]
-#[ignore = "按需导出关于页支持作者预览"]
-fn about_support_preview() {
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let dest=std::path::PathBuf::from(std::env::var_os("CAPSULEDOCK_SUPPORT_PREVIEW_DIR").expect("需指定预览目录"));
-    std::fs::create_dir_all(&dest).unwrap();
-    let mut h=H::new();h.app.open_settings();h.app.settings_tab=8;h.ctx.set_embed_viewports(false);
-    let output=std::sync::Arc::new(std::sync::Mutex::new(None));let capture=output.clone();
-    egui::Context::set_immediate_viewport_renderer(move|ctx,mut viewport|{
-        let id=viewport.ids.this;
-        let raw=egui::RawInput{viewport_id:id,screen_rect:Some(Rect::from_min_size(Pos2::ZERO,egui::vec2(690.0,560.0))),
-            viewports:std::iter::once((id,egui::ViewportInfo{native_pixels_per_point:Some(1.0),..Default::default()})).collect(),..Default::default()};
-        *capture.lock().unwrap()=Some(ctx.run(raw,|ctx|(viewport.viewport_ui_cb)(ctx)));
-    });
-    let mut raster=crate::preview_raster::Raster::new(690,560);
-    for dark in [true,false] { for open in [false,true] {
-        h.app.settings.settings_theme=if dark{crate::settings_theme::SettingsTheme::Dark}else{crate::settings_theme::SettingsTheme::Light};
-        h.ctx.data_mut(|data|data.insert_temp(egui::Id::new("support-author-open"),open));
-        for frame in 0..4 {
-            let root=h.ctx.run(Default::default(),|ctx|h.app.settings_ui(ctx,false));
-            let child=output.lock().unwrap().take().unwrap();
-            raster.update_textures(&root.textures_delta);raster.update_textures(&child.textures_delta);
-            if frame==3 {
-                let has_wechat=child.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="微信支付"));
-                assert_eq!(has_wechat,open);
-                for label in [if open{"返回"}else{"请喝咖啡 · 支持作者"},"完全自愿 · 感谢每一份支持 · 不影响功能使用"] {
-                    let shape=child.shapes.iter().find(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==label)).expect("按钮和说明必须可见");
-                    assert!(shape.clip_rect.contains_rect(shape.shape.visual_bounding_rect()),"默认窗口中内容不能被裁切：{label}");
-                }
-                raster.buf.fill([0.0,0.0,0.0,1.0]);
-                raster.draw(&h.ctx.tessellate(child.shapes,child.pixels_per_point),child.pixels_per_point);
-                let mut rgba=Vec::new();raster.to_rgba8(&mut rgba);
-                image::save_buffer(dest.join(format!("about-{}-{}.png",if dark{"dark"}else{"light"},if open{"open"}else{"closed"})),&rgba,690,560,image::ColorType::Rgba8).unwrap();
-            }
-            raster.free_textures(&root.textures_delta);raster.free_textures(&child.textures_delta);
-        }
-    } }
-}
-
-#[test]
 fn hover_tooltips_fit_native_region_and_release_it_after_leaving(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     for shelf in [false,true] {
@@ -3030,50 +2871,6 @@ fn compact_canvas_preserves_panel_and_notice_pixels(){
             assert_eq!(draw(1280.0,page,notice),draw(960.0,page,notice),"缩减透明余量不能改变页面 {page:?} 和通知 {notice} 的像素");
         }
     }
-}
-
-#[test]
-fn external_notice_respects_permissions_masks_preview_and_never_reemits(){
- let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
- h.app.receive_notification("系统音量".into(),"external.test".into(),"验证码 123456".into());assert!(h.app.notices.alerts.is_empty());
- h.app.settings.read_notifications=true;
- h.app.receive_notification("系统音量".into(),"external.test".into(),"验证码 123456".into());
- let a=h.app.notices.alerts.back().unwrap();assert!(!a.is_hud());assert!(!a.body.contains("123456"));assert_eq!(a.page,usize::MAX);
- assert!(h.app.notices.history.is_empty());assert!(!h.app.pending.iter().any(|c|matches!(c,crate::app::Cmd::Notify(..))));
- h.app.tick_alerts();assert!(h.app.notices.notice.is_some());h.app.settings.read_notifications=false;h.app.tick_alerts();assert!(h.app.notices.notice.is_none());
- h.app.settings.read_notifications=true;h.app.settings.notification_preview=true;
- h.app.receive_notification("测试".into(),"external.test".into(),"验证码 123456，请勿泄露".into());assert!(!h.app.notices.alerts.back().unwrap().body.contains("123456"));
- h.app.tick_alerts();h.app.t+=4.6;h.app.tick_alerts();assert!(h.app.notices.notice.is_none());
-}
-
-#[test]
-fn qq_only_notifications_filter_by_app_id_before_display_and_respect_preview(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
-    h.app.settings.read_notifications=true;h.app.settings.qq_only=true;h.app.settings.save();
-    assert!(crate::model::Settings::load().qq_only);
-    h.app.receive_notification("QQ".into(),"QQMusic".into(),"不属于 QQ 聊天".into());assert!(h.app.notices.alerts.is_empty());
-    h.app.receive_notification("QQ".into(),"QQ".into(),"测试联系人 · 测试消息".into());
-    assert!(!h.app.notices.alerts.back().unwrap().body.contains("测试联系人"));
-    h.app.settings.notification_preview=true;
-    h.app.receive_notification("QQ".into(),"QQ".into(),"测试联系人 · 测试消息".into());
-    assert_eq!(h.app.notices.alerts.back().unwrap().body,"测试联系人 · 测试消息");assert!(h.app.notices.history.is_empty());
-}
-
-#[test]
-fn wechat_notifications_work_without_toast_permission_and_stop_when_disabled(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
-    h.app.receive_wechat_reminder();assert!(h.app.notices.alerts.is_empty());
-    h.app.settings.wechat_notifications=true;
-    h.app.settings.save();assert!(crate::model::Settings::load().wechat_notifications);
-    assert!(!h.app.settings.read_notifications);
-    h.app.receive_wechat_reminder();h.app.tick_alerts();
-    let notice=h.app.notices.notice.as_ref().unwrap();
-    assert_eq!(notice.title,"微信");assert_eq!(notice.body,"有新消息 · 请到微信查看");
-    assert!(h.app.notices.history.is_empty());
-    assert!(!h.app.pending.iter().any(|c|matches!(c,crate::app::Cmd::Notify(..))));
-    h.app.settings.wechat_notifications=false;h.app.tick_alerts();assert!(h.app.notices.notice.is_none());
-    h.app.settings.wechat_notifications=true;h.app.settings.notifications=false;
-    h.app.receive_wechat_reminder();assert!(h.app.notices.alerts.is_empty());
 }
 
 #[test]
@@ -3465,34 +3262,6 @@ fn side_dock_gallery(){
 fn feature_raster_sized(w:f32,h:f32)->crate::preview_raster::Raster{crate::preview_raster::Raster::new((w*2.0) as usize,(h*2.0) as usize)}
 
 #[test]
-fn automatic_minimal_hides_unread_hit_area_until_reopened(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    for dock in [crate::model::Dock::Top,crate::model::Dock::Left,crate::model::Dock::Right] {
-        let mut h=H::new();
-        h.app.settings.dock=dock;
-        h.app.settings.browser_minimal=true;
-        h.app.settings.wechat_notifications=true;
-        h.app.settings.read_notifications=true;
-        h.app.receive_wechat_reminder();
-        h.app.receive_notification("QQ".into(),"QQ".into(),"测试".into());
-        h.app.notices.alerts.clear();
-        h.app.notices.notice=None;
-        h.app.notices.notification_bell_until=0.0;
-        h.browser_at_top=Some(true);
-        for _ in 0..90 {side_frame_with(&mut h,None);}
-        let out=side_frame_with(&mut h,None);
-        assert!(out.notice_hit.is_none(),"{dock:?} 避让时未读仍占用鼠标区域");
-        assert_eq!(h.app.pending_messengers.len(),2);
-        h.app.show_page(0);
-        for _ in 0..60 {side_frame_with(&mut h,None);}
-        assert!(side_frame_with(&mut h,None).notice_hit.is_some());
-        h.browser_at_top=Some(false);
-        for _ in 0..360 {side_frame_with(&mut h,None);}
-        assert!(!h.app.morph.open && side_frame_with(&mut h,None).notice_hit.is_some());
-    }
-}
-
-#[test]
 fn side_dock_auto_minimal_follows_avoidance(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let (w,hgt)=(crate::side_dock::SIDE_W,crate::side_dock::SIDE_H);
@@ -3557,16 +3326,6 @@ fn side_dock_opens_from_the_edge_and_collapses_back(){
         for _ in 0..90 {out=side_frame(&mut h,away);}
         assert!(!h.app.morph.open && h.app.progress()<0.05);
         assert!(out.hit.width()<60.0);
-    }
-}
-
-#[test]
-fn notification_preview_masks_fullwidth_and_zero_width_codes(){
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
-    h.app.settings.read_notifications=true;h.app.settings.notification_preview=true;
-    for body in ["验证码 １２３４５６，请勿泄露","验证码 12\u{200b}3456，请勿泄露"] {
-        h.app.receive_notification("测试".into(),"external.test".into(),body.into());
-        assert_eq!(h.app.notices.alerts.back().unwrap().body,"验证码 ••••••，请勿泄露");
     }
 }
 
@@ -3671,153 +3430,6 @@ fn settings_gallery(){
 }
 
 #[test]
-fn messenger_notifications_keep_separate_badges_until_the_client_is_viewed(){
-    use crate::app::{Cmd,Messenger,Unread};
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut h=H::new();h.app.settings.wechat_notifications=true;h.app.settings.read_notifications=true;
-    h.frame(vec![]);h.app.receive_wechat_reminder();
-    for _ in 0..60{h.frame(vec![]);}
-    h.click_text("查看");assert!(h.cmds.contains(&Cmd::ViewMessenger(Unread::of(Messenger::Wechat))));
-    h.click_text("关闭");assert!(h.app.notices.notice.is_none());
-    h.cursor=None;h.app.receive_notification("QQ".into(),"QQ".into(),"小林 · 测试".into());
-    for _ in 0..360{h.frame(vec![]);}
-    assert!(h.app.notices.notice.is_none());
-    let sources=|h:&H|h.app.pending_messengers.iter().map(|u|u.source).collect::<Vec<_>>();
-    assert_eq!(sources(&h),[Messenger::Wechat,Messenger::Qq]);
-    // 收起时两条未读叠成一个入口，点它展开面板，再在旁边的胶囊里逐个点开。
-    h.frame(vec![]);
-    let stack=h.ctx.read_response(egui::Id::new(("card",true,"messenger-stack"))).expect("叠放入口可点击").rect.center();
-    h.click(stack);for _ in 0..60{h.frame(vec![]);}
-    assert!(h.app.morph.open);
-    for source in [Messenger::Wechat,Messenger::Qq]{
-        h.frame(vec![]);
-        let pos=h.ctx.read_response(egui::Id::new(("card",true,source.name()))).expect("胶囊图标可点击").rect.center();
-        h.cmds.clear(); h.click(pos);assert!(h.cmds.contains(&Cmd::ViewMessenger(Unread::of(source))),"{source:?} {pos:?} {:?}",h.cmds);
-        h.app.viewed_messenger(source);h.frame(vec![]);
-    }
-    assert!(h.app.pending_messengers.is_empty());
-    h.app.receive_wechat_reminder();h.app.receive_wechat_reminder();
-    assert_eq!(sources(&h),[Messenger::Wechat]);
-    h.app.settings.wechat_notifications=false;h.frame(vec![]);assert!(h.app.pending_messengers.is_empty());
-}
-
-#[test]
-fn messenger_capsule_grows_during_opening(){
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut h=H::new();
-    h.app.settings.wechat_notifications=true;
-    h.app.receive_wechat_reminder();
-    h.app.notices.alerts.clear();
-    h.app.notices.notice=None;
-    for opening in [true,false,true,false] {
-        h.cursor=opening.then_some(Pos2::new(WIN_W/2.0,12.0));
-        let mut sampled=false;
-        for _ in 0..90 {
-            h.frame(vec![]);
-            let appear=h.app.messenger_appear();
-            if (0.02..0.95).contains(&appear) {
-                let button=h.ctx.read_response(egui::Id::new(("card",true,"微信".to_string()))).unwrap();
-                sampled|=(1.0..crate::app::UNREAD_W-1.0).contains(&button.rect.width());
-            }
-        }
-        assert!(sampled && h.app.morph.open==opening,"每次展开与收回都应经过中间尺寸");
-    }
-}
-
-#[test]
-fn messenger_accounts_get_number_tags_and_clear_one_by_one(){
-    use crate::app::{Cmd,Messenger,Unread};
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut h=H::new();h.app.settings.wechat_notifications=true;h.app.settings.read_notifications=true;
-    h.app.receive_wechat_reminder_from(100,11);h.app.receive_wechat_reminder_from(200,22);h.app.receive_wechat_reminder_from(100,12);
-    h.app.receive_notification("QQ".into(),"QQ".into(),"测试".into());
-    assert_eq!(h.app.pending_messengers,[Unread{source:Messenger::Wechat,pid:100,window:12},Unread{source:Messenger::Wechat,pid:200,window:22},Unread::of(Messenger::Qq)]);
-    assert_eq!((h.app.unread_tag(0),h.app.unread_tag(1),h.app.unread_tag(2)),(Some(1),Some(2),None),"只有同一来源多个账号才编号");
-    h.app.notices.alerts.clear();h.app.notices.notice=None;
-    h.hover(Pos2::new(WIN_W/2.0,12.0),1.5);
-    let rect=|h:&H,name:&str|h.ctx.read_response(egui::Id::new(("card",true,name.to_string()))).unwrap_or_else(||panic!("{name}")).rect;
-    let panel=h.app.island_rect(Rect::from_min_size(Pos2::ZERO,Vec2::new(WIN_W,WIN_H)),crate::app::PW,h.app.expanded_height());
-    let (a,b,q)=(rect(&h,"微信"),rect(&h,"微信2"),rect(&h,"QQ"));
-    assert!(a.bottom()<=b.top()+0.5 && b.bottom()<=q.top()+0.5);
-    let inset=h.app.unread_top_inset();assert!(inset>0.0,"顶部停靠时胶囊离开屏幕上沿");
-    assert!((a.top()-panel.top()-inset-2.0).abs()<1.0 && (q.bottom()-panel.bottom()+2.0).abs()<1.0,"三个图标时胶囊下沿与面板对齐 {a:?} {q:?} {panel:?}");
-    h.cmds.clear();h.click(b.center());
-    assert!(h.cmds.contains(&Cmd::ViewMessenger(Unread{source:Messenger::Wechat,pid:200,window:22})));
-    h.app.viewed_client(Messenger::Wechat,200);
-    assert_eq!(h.app.pending_messengers,[Unread{source:Messenger::Wechat,pid:100,window:12},Unread::of(Messenger::Qq)]);
-    assert_eq!(h.app.unread_tag(0),None,"剩一个账号就不再编号");
-    h.app.viewed_client(Messenger::Qq,4321);
-    assert_eq!(h.app.pending_messengers,[Unread{source:Messenger::Wechat,pid:100,window:12}]);
-    // 四个以上：胶囊仍与面板等高，滚轮翻到后面的图标。
-    for pid in [300,400,500]{h.app.receive_wechat_reminder_from(pid,0);}
-    h.hover(Pos2::new(WIN_W/2.0,12.0),0.2);
-    let capsule=rect(&h,"微信");
-    let last=|h:&H|rect(h,"微信4");
-    let before=last(&h);
-    assert!(before.height()<1.0 || before.top()>=panel.bottom()-3.0,"第四个先藏在下面");
-    h.hover(Pos2::new(capsule.center().x,panel.top()+30.0),0.1);
-    for _ in 0..10{h.wheel(-40.0);}
-    h.frame(vec![]);
-    assert!(last(&h).height()>20.0 && last(&h).bottom()<=panel.bottom(),"滚动后露出第四个 {:?}",last(&h));
-}
-
-#[test]
-fn messenger_notifications_stay_right_and_move_outside_expanded_panel(){
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut h=H::new();h.app.settings.wechat_notifications=true;
-    h.frame(vec![]);h.app.receive_wechat_reminder();
-    for _ in 0..360{h.frame(vec![]);}
-    let badge=|h:&H|h.ctx.read_response(egui::Id::new(("card",true,"微信"))).unwrap().rect;
-    assert!(badge(&h).left()>WIN_W/2.0);
-    h.hover(Pos2::new(WIN_W/2.0,12.0),1.5);
-    assert!(h.app.morph.open && badge(&h).left()>WIN_W/2.0);
-    assert!((badge(&h).left()-(WIN_W/2.0+crate::app::PW/2.0+crate::app::UNREAD_GAP)).abs()<1.0,"展开后与面板留一小段间距 {:?}",badge(&h));
-    let center=badge(&h).center();
-    assert!(h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r)
-        if r.rect.contains(center) && (r.rect.width()-crate::app::UNREAD_W).abs()<0.1 && (r.rect.height()-crate::app::UNREAD_W).abs()<0.1)),"一个图标时是正圆");
-    h.click(badge(&h).center());
-    assert!(h.cmds.contains(&crate::app::Cmd::ViewMessenger(crate::app::Unread::of(crate::app::Messenger::Wechat))));
-}
-
-#[test]
-fn messenger_notifications_align_with_system_banner(){
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut h=H::new();
-    h.app.settings.wechat_notifications=true;
-    h.app.settings.read_notifications=true;
-    h.frame(vec![]);h.app.receive_wechat_reminder();
-    for _ in 0..360{h.frame(vec![]);}
-    h.app.receive_notification("ChatGPT".into(),"ChatGPT".into(),"测试".into());
-    for _ in 0..60{h.frame(vec![]);}
-    let rect=|name|h.ctx.read_response(egui::Id::new(("card",true,name))).unwrap().rect;
-    let badge=rect("微信");let close=rect("external-dismiss");
-    assert!(badge.left()>close.right());
-    assert!((badge.center().y-close.center().y).abs()<1.1);
-}
-
-#[test]
-fn messenger_notifications_side_docks_keep_one_column(){
-    let _guard=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    for dock in [crate::model::Dock::Left,crate::model::Dock::Right]{
-        let mut h=H::new();h.app.settings.dock=dock;h.app.settings.wechat_notifications=true;h.app.settings.read_notifications=true;
-        h.app.receive_wechat_reminder();h.app.receive_notification("QQ".into(),"QQ".into(),"测试".into());
-        for _ in 0..720{h.frame(vec![]);}
-        let win=Rect::from_min_size(Pos2::ZERO,Vec2::new(WIN_W,WIN_H));
-        let stack=h.ctx.read_response(egui::Id::new(("card",true,"messenger-stack"))).unwrap().rect;
-        let bar=h.app.island_rect(win,h.app.morph.w.pos,h.app.morph.h.pos);
-        assert!((stack.center().x-bar.center().x).abs()<1.0 && stack.top()>=bar.bottom()-0.5,"收起时叠放在竖胶囊下方");
-        h.click(stack.center());for _ in 0..90{h.frame(vec![]);}
-        let rect=|name|h.ctx.read_response(egui::Id::new(("card",true,name))).unwrap().rect;
-        let a=rect("微信");let b=rect("QQ");
-        assert_eq!(a.center().x,b.center().x);assert!(a.bottom()<=b.top()+0.01);
-        let panel=h.app.island_rect(win,crate::app::PW,h.app.expanded_height());
-        if dock==crate::model::Dock::Left {assert!(a.left()>=panel.right()+crate::app::UNREAD_GAP-0.5,"左停靠：胶囊在面板右侧");}
-        else {assert!(a.right()<=panel.left()-crate::app::UNREAD_GAP+0.5,"右停靠：胶囊在面板左侧");}
-        assert!((a.top()-panel.top()-2.0).abs()<1.0 && h.app.unread_top_inset()==0.0,"侧边停靠时顶端与面板对齐");
-    }
-}
-
-#[test]
 fn side_dock_file_drag_opens_the_shelf_and_drop_saves_it(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let (w,hgt)=(crate::side_dock::SIDE_W,crate::side_dock::SIDE_H);
@@ -3846,75 +3458,6 @@ fn side_dock_file_drag_opens_the_shelf_and_drop_saves_it(){
         frame(&mut h,false,true);
         assert!(h.app.shelf.items.contains(&path),"{dock:?} 松手后应放进置物架");
         h.app.shelf.items.clear();h.app.shelf.save();
-    }
-}
-
-fn shoot_unread(h:&mut H,raster:&mut crate::preview_raster::Raster,dest:&std::path::Path,name:&str,frames:usize,cursor:Option<Pos2>){
-    let ppp=2.0;
-    let side=h.app.settings.dock.is_side();
-    let (w,hgt)=if side {(crate::side_dock::SIDE_W,crate::side_dock::SIDE_H)} else {(crate::app::CANVAS_W,WIN_H)};
-    let (ww,wh)=if side {(w,hgt)} else {(WIN_W,WIN_H)};
-    for f in 0..frames {
-        h.t+=1.0/60.0;
-        let env=Env{t:h.t,clock:"09:41:00".into(),today:"2026-11-05".into(),date:"11月5日 周四".into(),cursor,bt_ready:true,battery:Some(76),..Default::default()};
-        let raw=egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(w,hgt))),time:Some(h.t),focused:true,
-            events:cursor.map(|p|vec![egui::Event::PointerMoved(p)]).unwrap_or_default(),
-            viewports:std::iter::once((egui::ViewportId::ROOT,egui::ViewportInfo{native_pixels_per_point:Some(ppp),..Default::default()})).collect(),..Default::default()};
-        let app=&mut h.app;
-        let output=h.ctx.run(raw,|ctx|{egui::CentralPanel::default().frame(egui::Frame::new()).show(ctx,|ui|{let win=Rect::from_min_size(ui.max_rect().min,Vec2::new(ww,wh));app.frame(ui,win,&env);});});
-        raster.update_textures(&output.textures_delta);
-        if f+1==frames {
-            raster.buf.fill([0.20,0.24,0.32,1.0]);
-            raster.draw(&h.ctx.tessellate(output.shapes,output.pixels_per_point),output.pixels_per_point);
-            let mut rgba=Vec::new();raster.to_rgba8(&mut rgba);
-            let image=image::RgbaImage::from_raw((w*ppp) as u32,(hgt*ppp) as u32,rgba).unwrap();
-            let image=if side {image::imageops::crop_imm(&image,0,240,(w*ppp) as u32,720).to_image()} else {image::imageops::crop_imm(&image,0,0,(WIN_W*ppp) as u32,(WIN_H*ppp) as u32).to_image()};
-            image.save(dest.join(format!("{name}.png"))).unwrap();
-        }
-        raster.free_textures(&output.textures_delta);
-    }
-}
-
-#[test]
-#[ignore="按需导出微信 / QQ 未读胶囊的实际画面"]
-fn unread_gallery(){
-    use crate::app::Messenger;
-    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let dest=std::path::PathBuf::from(std::env::var_os("CAPSULEDOCK_FEATURE_PREVIEW_DIR").expect("需指定预览目录"));std::fs::create_dir_all(&dest).unwrap();
-    let fill=|h:&mut H,n:usize|{
-        h.app.settings.wechat_notifications=true;h.app.settings.read_notifications=true;h.app.settings.pet=false;
-        let all=[(Messenger::Wechat,101),(Messenger::Qq,0),(Messenger::Wechat,202),(Messenger::Wechat,303),(Messenger::Qq,0)];
-        for (source,pid) in all.into_iter().take(n){
-            if source==Messenger::Wechat {h.app.receive_wechat_reminder_from(pid,0);} else {h.app.receive_notification("QQ".into(),"QQ".into(),"测试".into());}
-        }
-        h.app.notices.alerts.clear();h.app.notices.notice=None;h.app.notices.notification_bell_until=0.0;
-    };
-    for dock in [crate::model::Dock::Top,crate::model::Dock::Left,crate::model::Dock::Right]{
-        let key=dock.key();
-        for n in [1,2,3,4]{
-            let mut h=H::new();h.app.settings.dock=dock;fill(&mut h,n);
-            let side=dock.is_side();
-            let (w,hgt)=if side {(crate::side_dock::SIDE_W,crate::side_dock::SIDE_H)} else {(crate::app::CANVAS_W,WIN_H)};
-            let mut r=if side {feature_raster_sized(w,hgt)} else {feature_raster()};
-            let away=Some(Pos2::new(if side {w/2.0} else {WIN_W/2.0},hgt-6.0));
-            let near=if dock==crate::model::Dock::Left {Pos2::new(8.0,hgt/2.0)} else if dock==crate::model::Dock::Right {Pos2::new(w-8.0,hgt/2.0)} else {Pos2::new(WIN_W/2.0,12.0)};
-            if n!=3 {shoot_unread(&mut h,&mut r,&dest,&format!("unread-{key}-{n}-collapsed"),60,away);}
-            shoot_unread(&mut h,&mut r,&dest,&format!("unread-{key}-{n}-open"),80,Some(near));
-        }
-        // 微信多开：两个微信账号；两个微信账号 + QQ。
-        for (tag,qq) in [("multi2",false),("multi3",true)]{
-            let mut h=H::new();h.app.settings.dock=dock;fill(&mut h,0);
-            h.app.receive_wechat_reminder_from(101,0);h.app.receive_wechat_reminder_from(202,0);
-            if qq {h.app.receive_notification("QQ".into(),"QQ".into(),"测试".into());}
-            h.app.notices.alerts.clear();h.app.notices.notice=None;h.app.notices.notification_bell_until=0.0;
-            let side=dock.is_side();
-            let (w,hgt)=if side {(crate::side_dock::SIDE_W,crate::side_dock::SIDE_H)} else {(crate::app::CANVAS_W,WIN_H)};
-            let mut r=if side {feature_raster_sized(w,hgt)} else {feature_raster()};
-            let away=Some(Pos2::new(if side {w/2.0} else {WIN_W/2.0},hgt-6.0));
-            let near=if dock==crate::model::Dock::Left {Pos2::new(8.0,hgt/2.0)} else if dock==crate::model::Dock::Right {Pos2::new(w-8.0,hgt/2.0)} else {Pos2::new(WIN_W/2.0,12.0)};
-            shoot_unread(&mut h,&mut r,&dest,&format!("unread-{key}-{tag}-collapsed"),60,away);
-            shoot_unread(&mut h,&mut r,&dest,&format!("unread-{key}-{tag}-open"),80,Some(near));
-        }
     }
 }
 

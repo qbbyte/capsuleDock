@@ -40,17 +40,6 @@ struct Shell {
     #[cfg(windows)]
     input_keys:Option<capsuledock::input::Shortcuts>,
     #[cfg(windows)]
-    incoming: Option<capsuledock::system::Notifications>,
-    #[cfg(windows)]
-    wechat: Option<capsuledock::wechat::Listener>,
-    #[cfg(windows)]
-    wechat_retry: Option<Instant>,
-    #[cfg(windows)]
-    opening_messenger:Option<(app::Unread,Instant)>,
-    /// 后台线程正在通过托盘按钮唤起微信。
-    #[cfg(windows)]
-    tray_opening:Option<(app::Unread,std::sync::mpsc::Receiver<Result<(),String>>)>,
-    #[cfg(windows)]
     hidden: bool,
     /// 毛玻璃皮肤的背景亮度采样（仅毛玻璃皮肤运行）。
     #[cfg(windows)]
@@ -89,10 +78,6 @@ impl Shell {
             minimal: app.settings.minimal,
             autostart,
         });
-        diagnostics::startup("初始化通知监听");
-        #[cfg(windows)]
-        let incoming=if app.settings.read_notifications {match capsuledock::system::connect(cc.egui_ctx.clone(),app.settings.qq_only){Ok(rx)=>Some(rx),Err(e)=>{app.listener_status=format!("Windows 无法读取通知：{}",e.code());None}}}else{None};
-        // 音频、网络与输入法查询由后台完成，避免首帧等待系统服务。
         diagnostics::startup("创建后台采样与窗口");
         let initial_input=None;
         #[cfg(windows)] let system_state=capsuledock::system::Snapshot::default();
@@ -124,11 +109,6 @@ impl Shell {
             fullscreen:None,
             input_state:capsuledock::input::Monitor::new(initial_input),
             #[cfg(windows)] input_keys:capsuledock::input::Shortcuts::start(),
-            #[cfg(windows)] incoming,
-            #[cfg(windows)] wechat:None,
-            #[cfg(windows)] wechat_retry:None,
-            #[cfg(windows)] opening_messenger:None,
-            #[cfg(windows)] tray_opening:None,
             #[cfg(windows)] hidden:false,
             #[cfg(windows)] backdrop:None,
             #[cfg(windows)]
@@ -346,54 +326,6 @@ impl eframe::App for Shell {
             if let Some(service)=&self.bt_rx {
                 while let Ok(found)=service.rx.try_recv(){ self.bt=found; self.bt_ready=true; }
             }
-            let wechat_enabled=self.app.settings.wechat_notifications && self.app.settings.notifications;
-            if self.wechat.as_ref().is_some_and(|listener|!listener.registered()){self.wechat=None;}
-            if !wechat_enabled {
-                self.wechat=None;
-                self.wechat_retry=None;
-                self.app.wechat_status.clear();
-            }else if self.wechat.is_none() && self.wechat_retry.is_none_or(|at|at.elapsed()>=Duration::from_secs(10)){
-                match capsuledock::wechat::Listener::new(ctx.clone()){
-                    Ok(listener)=>{
-                        self.wechat=Some(listener);
-                        self.wechat_retry=None;
-                        self.app.wechat_status="正在监听 · 微信任务栏闪动时提醒".into();
-                    }
-                    Err(error)=>{
-                        self.wechat_retry=Some(Instant::now());
-                        self.app.wechat_status=format!("{error} · 10 秒后重试");
-                    }
-                }
-            }
-            let previous_pending=self.app.pending_messengers.len();
-            for (pid,window) in self.wechat.as_ref().map(|listener|listener.take()).unwrap_or_default(){self.app.receive_wechat_reminder_from(pid,window);}
-            if let Some(rx)=&self.incoming {
-                while let Ok(event)=rx.try_recv(){match event {capsuledock::system::Incoming::Revoked=>{self.app.settings.read_notifications=false;self.app.settings.save();},capsuledock::system::Incoming::Status(s)=>self.app.listener_status=s,capsuledock::system::Incoming::Message(a,id,b)=>self.app.receive_notification(a,id,b)}}
-            }
-            if foreground_changed || self.app.pending_messengers.len()!=previous_pending {
-                // 在微信 / QQ 里打开了某个账号的窗口：清掉这个账号的未读。
-                let mut sources:Vec<app::Messenger>=self.app.pending_messengers.iter().map(|u|u.source).collect();sources.dedup();
-                if let Some((source,pid))=capsuledock::wechat::foreground_client(&sources){self.app.viewed_client(source,pid);}
-            }
-            if let Some((unread,rx))=&self.tray_opening {
-                let unread=*unread;
-                match rx.try_recv(){
-                    Ok(Ok(()))=>{self.tray_opening=None;self.opening_messenger=Some((unread,Instant::now()));ctx.request_repaint_after(Duration::from_secs(4));}
-                    Ok(Err(error))=>{self.tray_opening=None;self.app.say(error);}
-                    Err(std::sync::mpsc::TryRecvError::Disconnected)=>{self.tray_opening=None;self.app.say("未能唤起微信，请从托盘打开");}
-                    Err(std::sync::mpsc::TryRecvError::Empty)=>{}
-                }
-            }
-            if let Some((unread,started))=self.opening_messenger {
-                if !self.app.pending_messengers.contains(&unread){self.opening_messenger=None;}
-                else if started.elapsed()>=Duration::from_secs(4){
-                    self.opening_messenger=None;
-                    match capsuledock::wechat::foreground_client(&[unread.source]){
-                        Some((source,pid))=>self.app.viewed_client(source,pid),
-                        None=>self.app.say(format!("{}尚未切到前台，可点图标重试",unread.source.name())),
-                    }
-                }
-            }
         }
         if let Some(rx)=&self.seek_rx {
             if let Some(success)=match rx.try_recv(){Ok(success)=>Some(success),Err(std::sync::mpsc::TryRecvError::Disconnected)=>Some(false),Err(_)=>None}{
@@ -430,23 +362,6 @@ impl eframe::App for Shell {
                         Ok(Some(rx))=>self.seek_rx=Some(rx),Ok(None)=>{},Err(())=>self.app.say("播放器正在响应，请稍后重试"),
                     }
                 }
-                Cmd::ViewMessenger(unread)=>{
-                    #[cfg(windows)] match capsuledock::wechat::open_unread(unread){
-                        Ok(())=>{
-                            match capsuledock::wechat::foreground_client(&[unread.source]){
-                                Some((source,pid))=>self.app.viewed_client(source,pid),
-                                None=>{self.opening_messenger=Some((unread,Instant::now()));ctx.request_repaint_after(Duration::from_secs(4));}
-                            }
-                        },
-                        Err(_) if self.app.settings.wechat_tray_open && self.tray_opening.is_none() && capsuledock::wechat::wechat_in_tray(unread)=>{
-                            // 缩在托盘：后台线程按下该账号的托盘按钮，不阻塞界面。
-                            let (tx,rx)=std::sync::mpsc::channel();let repaint=ctx.clone();
-                            std::thread::spawn(move||{let _=tx.send(capsuledock::wechat::open_wechat_from_tray(unread));repaint.request_repaint();});
-                            self.tray_opening=Some((unread,rx));
-                        }
-                        Err(error)=>self.app.say(error),
-                    }
-                }
                 Cmd::Open(p) => {if let Err(e)=open_path(&p){self.app.say(e);}},
                 Cmd::AddFiles=>{
                     #[cfg(windows)] match capsuledock::system::pick_files(){Ok(files)=>if !files.is_empty(){self.app.on_drop(files);self.app.show_page(2);},Err(e)=>self.app.say(format!("无法选择文件：{}",e.code()))}
@@ -455,7 +370,6 @@ impl eframe::App for Shell {
                     #[cfg(windows)] if let Err(e)=capsuledock::system::drag_file(&p){self.app.say(format!("无法拖出文件：{}",e.code()));}
                     ctx.input_mut(|i| i.pointer=Default::default());
                 },
-                Cmd::DisconnectNotifications=>{#[cfg(windows)]{self.incoming=None;self.app.settings.read_notifications=false;self.app.settings.save();self.app.listener_status="已断开，不再读取 Windows 通知".into();}},
                 Cmd::Reveal(p)=>{let _=std::process::Command::new("explorer.exe").arg(format!("/select,{}",p.display())).spawn();},
                 Cmd::ToggleAutostart=>{
                     #[cfg(windows)] {let want=!self.autostart;match capsuledock::tray::set_autostart(want){Ok(())=>self.autostart=want,Err(e)=>self.app.say(e)}}
@@ -471,9 +385,6 @@ impl eframe::App for Shell {
                 Cmd::Copy(text)=>{ctx.copy_text(text);self.app.say("已复制");},
                 Cmd::Notify(title,body)=>{
                     #[cfg(windows)] if let Some(tray)=&self.tray{tray.notify(&title,&body,self.app.settings.sound);}
-                },
-                cmd @ (Cmd::RequestNotifications|Cmd::RequestQqNotifications)=>{
-                    #[cfg(windows)] {self.app.settings.qq_only=matches!(cmd,Cmd::RequestQqNotifications);self.app.settings.read_notifications=true;self.app.settings.save();self.incoming=None;match capsuledock::system::connect(ctx.clone(),self.app.settings.qq_only){Ok(rx)=>{self.incoming=Some(rx);self.app.listener_status="正在请求 Windows 通知权限…".into();},Err(e)=>self.app.listener_status=format!("Windows 未允许读取通知：{}。需要相应的系统权限或应用身份。",e.code())}}
                 },
                 Cmd::Focus => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
             }

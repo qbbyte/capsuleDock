@@ -6,7 +6,6 @@
 //! - `native` / `tray`：仅 Windows 的窗口区域、命中穿透与托盘
 
 pub mod display_layout;
-mod code_mask;
 pub mod poll_clock;
 pub mod resources;
 pub mod anim;
@@ -26,7 +25,6 @@ pub mod clipboard;
 pub mod side_dock;
 mod task_picker;
 pub mod model;
-pub mod otp;
 mod pages;
 mod extras;
 mod pet;
@@ -51,8 +49,6 @@ mod updates;
 
 #[cfg(windows)]
 pub mod native;
-#[cfg(windows)]
-pub mod wechat;
 #[cfg(windows)]
 pub mod tray;
 

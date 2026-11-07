@@ -215,12 +215,6 @@ pub struct Settings {
     pub resident_order: Vec<usize>,
     pub system_hud: bool,
     pub bluetooth_notifications: bool,
-    pub read_notifications:bool,
-    pub wechat_notifications:bool,
-    /// 微信缩在托盘时，点提醒通过系统托盘按钮唤起微信（默认关闭）。
-    pub wechat_tray_open:bool,
-    pub qq_only:bool,
-    pub notification_preview:bool,
     pub notifications: bool,
     pub sound: bool,
     pub lyrics_enabled:bool,
@@ -235,7 +229,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { display_id: String::new(), skin: Skin::Classic, island_shape: IslandShape::Notch, glass_blur: true, island_size: 100, island_offset: 0, dock: Dock::Top, settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, avoid_browsers: true, avoid_apps: Vec::new(), visible_pages: [true; 4], page_order: [0,1,2,3], show_battery: true, show_sysmon: true, clock_12h: false, clock_period: 0, resident_order: Vec::new(), system_hud: true, bluetooth_notifications: true, read_notifications:false, wechat_notifications:false, wechat_tray_open:false, qq_only:false, notification_preview:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, clipboard_history: true }
+        Self { display_id: String::new(), skin: Skin::Classic, island_shape: IslandShape::Notch, glass_blur: true, island_size: 100, island_offset: 0, dock: Dock::Top, settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, avoid_browsers: true, avoid_apps: Vec::new(), visible_pages: [true; 4], page_order: [0,1,2,3], show_battery: true, show_sysmon: true, clock_12h: false, clock_period: 0, resident_order: Vec::new(), system_hud: true, bluetooth_notifications: true, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, clipboard_history: true }
     }
 }
 
@@ -318,11 +312,6 @@ impl Settings {
                     let mapping=if bytes.len()==4 {[0usize,1,2,3]} else {[0usize,1,3,4]};
                     for (enabled,value) in s.visible_pages.iter_mut().zip(mapping) { *enabled=bytes[value]==b'1'; }
                 }
-                "read_notifications" => s.read_notifications=v=="1",
-                "wechat_notifications" => s.wechat_notifications=v=="1",
-                "wechat_tray_open" => s.wechat_tray_open=v=="1",
-                "qq_only" => s.qq_only=v=="1",
-                "notification_preview" => s.notification_preview=v=="1",
                 "system_hud" => s.system_hud = v != "0",
                 "bluetooth_notifications" => s.bluetooth_notifications = v != "0",
                 "notifications" => s.notifications = v != "0",
@@ -365,11 +354,6 @@ impl Settings {
                 ("clock_12h".into(), (self.clock_12h as u8).to_string()),
                 ("show_battery".into(), (self.show_battery as u8).to_string()),
                 ("show_sysmon".into(), (self.show_sysmon as u8).to_string()),
-                ("read_notifications".into(),(self.read_notifications as u8).to_string()),
-                ("wechat_notifications".into(),(self.wechat_notifications as u8).to_string()),
-                ("wechat_tray_open".into(),(self.wechat_tray_open as u8).to_string()),
-                ("qq_only".into(),(self.qq_only as u8).to_string()),
-                ("notification_preview".into(),(self.notification_preview as u8).to_string()),
                 ("system_hud".into(), (self.system_hud as u8).to_string()),
                 ("bluetooth_notifications".into(), (self.bluetooth_notifications as u8).to_string()),
                 ("notifications".into(), (self.notifications as u8).to_string()),
@@ -749,26 +733,5 @@ mod tests {
         assert_eq!(human_size(1024), "1.0 KB");
         assert_eq!(human_size(1536 * 1024), "1.5 MB");
         assert_eq!(human_size(2 * 1024 * 1024 * 1024), "2.0 GB");
-    }
-}
-
-/// 仅保存应用标识与开关，不保存通知内容。
-#[derive(Clone,Debug,Default)]
-pub struct NotificationApps {pub items:Vec<(String,String,bool)>}
-impl NotificationApps {
-    pub fn load()->Self {
-        let path=config_dir().join("notification-apps.json");
-        let Ok(raw)=fs::read(path) else{return Self::default()};
-        let Ok(json)=serde_json::from_slice::<serde_json::Value>(&raw) else{return Self::default()};
-        let items=json.as_array().into_iter().flatten().filter_map(|a|Some((a.get("id")?.as_str()?.to_owned(),a.get("name")?.as_str()?.to_owned(),a.get("enabled")?.as_bool()?))).collect();Self{items}
-    }
-    pub fn save(&self){
-        let list:Vec<_>=self.items.iter().map(|(id,name,enabled)|serde_json::json!({"id":id,"name":name,"enabled":enabled})).collect();
-        let path=config_dir().join("notification-apps.json");if let Some(parent)=path.parent(){let _=fs::create_dir_all(parent);}if let Ok(data)=serde_json::to_vec(&list){let _=atomic_write(&path,&data);}
-    }
-    pub fn observe(&mut self,id:&str,name:&str)->bool{
-        if let Some(item)=self.items.iter().find(|a|a.0==id){return item.2;}
-        let enabled=true;
-        self.items.push((id.to_string(),name.to_string(),enabled));self.save();enabled
     }
 }

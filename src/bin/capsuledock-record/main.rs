@@ -524,7 +524,7 @@ fn gallery() {
             if scene==10 && frame==0 {app.alert("专注计时","该休息了",1,false);}
             if scene==11 && frame==0 {app.alert("系统音量","音量 67%",usize::MAX,false);}
             if scene==12 {app.settings.minimal=true;}
-            if scene==13 && frame==0 {app.receive_notification("聊天应用".into(),"whatsapp.preview".into(),"你好，下午见".into());}
+            if scene==13 && frame==0 {app.alert("蓝牙设备","OpenMove by Shokz · 电量 80%",5,false);}
             let idle=if scene==5{60.0}else if scene==6{200.0}else{0.0};
             let env=Env{t,clock:"10:28:00".into(),today:"2026-10-28".into(),date:"10月28日 周三".into(),battery:Some(76),charging:true,cursor:if scene<4{Some(Pos2::new(320.0,60.0))}else{None},idle_seconds:Some(idle),..Default::default()};
             let raw=egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(640.0,190.0))),time:Some(t),viewports:std::iter::once((egui::ViewportId::ROOT,egui::ViewportInfo{native_pixels_per_point:Some(2.0),..Default::default()})).collect(),..Default::default()};

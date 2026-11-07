@@ -6,7 +6,7 @@ use crate::theme::{self, size, W};
 use eframe::egui::{self, Color32, Rect};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AlertSource { Internal, Wechat, External(String) }
+pub(crate) enum AlertSource { Internal }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Alert {
@@ -19,14 +19,7 @@ pub(crate) struct Alert {
     pub bluetooth: Option<(crate::bt::DeviceKind, bool)>,
 }
 impl Alert {
-    pub(crate) fn messenger(&self)->Option<crate::app::Messenger>{
-        match &self.source {
-            AlertSource::Wechat=>Some(crate::app::Messenger::Wechat),
-            AlertSource::External(id) if id=="QQ"=>Some(crate::app::Messenger::Qq),
-            _=>None,
-        }
-    }
-    pub(crate) fn is_hud(&self)->bool {self.source==AlertSource::Internal && matches!(self.title.as_str(),"系统音量"|"大写锁定"|"键盘输入语言"|"网络连接"|"电源已连接"|"已切换电池供电"|"蓝牙设备")}
+    pub(crate) fn is_hud(&self)->bool {matches!(self.title.as_str(),"系统音量"|"大写锁定"|"键盘输入语言"|"网络连接"|"电源已连接"|"已切换电池供电"|"蓝牙设备")}
 }
 fn bluetooth_notice_content(body:&str)->(&str,&str,Option<u8>){
     if let Some(name)=body.strip_suffix(" · 已断开") {return (name,"已断开",None);}
@@ -61,33 +54,12 @@ pub(crate) fn device_icon(c: &Card, kind: crate::bt::DeviceKind, x: f32, y: f32,
 pub(crate) use crate::pet::PetState;
 
 pub(crate) fn notice_badge(c:&Card,x:f32,y:f32,a:&Alert){
-    if a.source==AlertSource::Internal && a.title=="蓝牙设备"{
+    if a.title=="蓝牙设备"{
         c.circle(x,y,11.0,if a.body.contains("已断开"){Color32::from_gray(95)}else{theme::BLUE});
         device_icon(c,a.bluetooth.map_or(crate::bt::DeviceKind::Other,|v|v.0),x-7.5,y-7.5,15.0);
     }else{notice_icon(&c.scaled(x,y,0.85),x,y,a);}
 }
-pub(crate) fn messenger_icon(c:&Card,x:f32,y:f32,source:crate::app::Messenger){
-
-    let ink=Color32::from_gray(24);
-    if source==crate::app::Messenger::Wechat {
-        let back=Color32::from_rgb(70,203,123);
-        let front=Color32::from_rgb(145,235,165);
-        c.fill(x-10.,y-7.,14.,11.,5.5,back);
-        c.poly(&[(x-8.,y+1.),(x-8.,y+6.),(x-3.,y+2.)],back);
-        for dx in [-6.,-1.]{c.circle(x+dx,y-3.,0.9,ink);}
-        c.fill(x-2.,y-2.,13.,10.,5.,front);
-        c.poly(&[(x+5.,y+6.),(x+9.,y+10.),(x+8.,y+5.)],front);
-        for dx in [2.,7.]{c.circle(x+dx,y+1.,0.8,ink);}
-    }else{
-        let rect=c.rect(x-9.5,y-9.5,19.0,19.0);
-        let icon=egui::Image::new(egui::include_image!("../assets/qq-client.png"));
-        if let Ok(egui::load::TexturePoll::Ready{texture})=icon.load_for_size(c.ui.ctx(),rect.size()){
-            c.painter.image(texture.id,rect,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),Color32::WHITE);
-        }
-    }
-}
 fn notice_icon(c:&Card,x:f32,y:f32,a:&Alert) {
-    if a.source!=AlertSource::Internal{crate::paint::bell(c,x,y,theme::WHITE,0.0);return;}
     match a.title.as_str() {
         "系统音量"=>{
             c.poly(&[(x-9.0,y-3.0),(x-5.0,y-3.0),(x,y-7.0),(x,y+7.0),(x-5.0,y+3.0),(x-9.0,y+3.0)],theme::WHITE);
@@ -211,89 +183,13 @@ impl App {
             crate::notice::EnqueueAction::None => {}
         }
     }
-    /// 该来源的所有账号都已查看。
-    pub fn viewed_messenger(&mut self,source:crate::app::Messenger){
-        self.pending_messengers.retain(|u|u.source!=source);
-        self.clear_messenger_notices(source);
-    }
-    /// 某个账号（进程）的窗口被打开：只清它自己；分不出账号的条目（pid 0）一并清掉。
-    pub fn viewed_client(&mut self,source:crate::app::Messenger,pid:u32){
-        self.pending_messengers.retain(|u|u.source!=source || pid!=0 && u.pid!=0 && u.pid!=pid);
-        if !self.pending_messengers.iter().any(|u|u.source==source){self.clear_messenger_notices(source);}
-    }
-    fn clear_messenger_notices(&mut self,source:crate::app::Messenger){
-        self.notices.clear_for_messenger(source);
-    }
-    fn mark_messenger(&mut self,source:crate::app::Messenger,pid:u32,window:isize){
-        if let Some(u)=self.pending_messengers.iter_mut().find(|u|u.source==source && u.pid==pid){
-            if window!=0 {u.window=window;}
-            return;
-        }
-        self.pending_messengers.push(crate::app::Unread{source,pid,window});
-    }
-    /// 横幅「查看」：跳到该来源最近一条未读的窗口。
-    pub(crate) fn latest_unread(&self,source:crate::app::Messenger)->crate::app::Unread{
-        self.pending_messengers.iter().rev().find(|u|u.source==source).copied().unwrap_or(crate::app::Unread::of(source))
-    }
-    pub fn receive_wechat_reminder(&mut self){self.receive_wechat_reminder_from(0,0);}
-    /// 微信窗口闪动：`pid` 是该账号的进程，`window` 是闪动的窗口。
-    pub fn receive_wechat_reminder_from(&mut self,pid:u32,window:isize){
-        if !self.settings.wechat_notifications || !self.settings.notifications{return;}
-        self.mark_messenger(crate::app::Messenger::Wechat,pid,window);
-        self.notices.ring_bell(self.t,4.5);
-        self.enqueue_alert(Alert{source:AlertSource::Wechat,title:"微信".into(),body:"有新消息 · 请到微信查看".into(),page:usize::MAX,at:self.t,duration:4.5,bluetooth:None},false);
-    }
-    pub fn receive_notification(&mut self, app:String, id:String, body:String){
-        if !self.settings.read_notifications || id.is_empty() || (self.settings.qq_only && id!="QQ"){return;}
-        // 胶囊坞自己发出的系统提醒会被通知中心回传；已在历史里的同一内容不再入队，避免重复显示。
-        if self.notices.history.iter().any(|a|format!("{} · {}",a.title,a.body)==body){return;}
-        if !self.notification_apps.observe(&id,&app) || !self.settings.notifications{return;}
-        if id=="QQ"{self.mark_messenger(crate::app::Messenger::Qq,0,0);}
-        self.notices.ring_bell(self.t,4.5);
-        let title=app.chars().filter(|c|!c.is_control()).take(80).collect();
-        let body=if self.settings.notification_preview {
-            let mut text=body.chars().filter(|c|!c.is_control()).take(300).collect::<String>();
-            if let Some(code)=crate::otp::extract("",&text,&[]) {text=crate::code_mask::mask(&text,&code.text);}
-            text
-        }else{"收到新通知 · 内容已隐藏".into()};
-        self.enqueue_alert(Alert{source:AlertSource::External(id),title,body,page:usize::MAX,at:self.t,duration:4.5,bluetooth:None},false);
-    }
     pub(crate) fn tick_alerts(&mut self) {
-        self.pending_messengers.retain(|u|self.settings.notifications && match u.source {
-            crate::app::Messenger::Wechat=>self.settings.wechat_notifications,
-            crate::app::Messenger::Qq=>self.settings.read_notifications && self.notification_apps.items.iter().any(|(key,_,on)|key=="QQ" && *on),
-        });
         // 告警在当前设置下是否允许展示：纯设置决策，留在 App 编排；队列/过滤/过期/出队交给 NoticeStack。
-        let allowed=|a:&Alert|match &a.source {
-            AlertSource::Internal=>true,
-            AlertSource::Wechat=>self.settings.wechat_notifications && self.settings.notifications,
-            AlertSource::External(id)=>self.settings.read_notifications && (!self.settings.qq_only || id=="QQ") && self.settings.notifications && self.notification_apps.items.iter().any(|(key,_,on)|key==id && *on),
-        };
+        let allowed=|_a:&Alert|true;
         self.notices.tick(self.t, allowed);
-        self.notices.apply_preview_policy(self.settings.notification_preview);
     }
     pub(crate) fn draw_notice(&mut self, c:&Card,panel:Rect,a:&Alert,_cmds:&mut Vec<Cmd>){
         let nc=c.clipped(0.0,0.0,panel.width(),panel.height());
-        if let Some(source)=a.messenger(){
-            messenger_icon(&nc,22.0,22.0,source);
-            nc.circle(31.0,14.0,2.6,Color32::from_rgb(255,72,72));
-            nc.centered_text(44.0,14.0,&a.title,11.0,W::Semibold,theme::WHITE,H::Left);
-            nc.centered_text(44.0,30.0,&nc.fit(&a.body,10.5,W::Regular,154.0),10.5,W::Regular,theme::GRAY,H::Left);
-            if notice_button(&nc,206.0,12.0,52.0,"查看","messenger-view"){_cmds.push(Cmd::ViewMessenger(self.latest_unread(source)));}
-            if notice_button(&nc,265.0,12.0,52.0,"关闭","messenger-dismiss"){self.notices.notice=None;self.notices.notification_bell_until=0.0;}
-            return;
-        }
-        if a.source!=AlertSource::Internal {
-            crate::paint::bell(&nc,310.0,22.0,theme::GRAY,crate::paint::bell_swing(self.t-a.at));
-            nc.circle(314.0,17.5,2.0,Color32::from_rgb(255,72,72));
-            nc.centered_text(16.0,14.0,&nc.fit(&a.title,11.0,W::Semibold,198.0),11.0,W::Semibold,theme::WHITE,H::Left);
-            nc.centered_text(16.0,30.0,&nc.fit(&a.body,10.5,W::Regular,198.0),10.5,W::Regular,theme::GRAY,H::Left);
-            if notice_button(&nc,226.0,12.0,60.0,"关闭","external-dismiss"){
-                self.notices.notice=None;
-                self.notices.notification_bell_until=0.0;
-            }
-            return;
-        }
         if a.is_hud(){
             if a.title=="蓝牙设备" {
                 let (name,status,battery)=bluetooth_notice_content(&a.body);
@@ -699,8 +595,6 @@ impl App {
             _=>{
                 if setting_button(c,43.0,56.0,152.0,if self.settings.notifications{"提醒 · 开"}else{"提醒 · 关"},self.settings.notifications,"set-notice"){self.settings.notifications=!self.settings.notifications;}
                 if setting_button(c,212.0,56.0,153.0,if self.settings.sound{"声音 · 开"}else{"声音 · 关"},self.settings.sound,"set-sound"){self.settings.sound=!self.settings.sound;}
-                if setting_button(c,43.0,84.0,152.0,if self.settings.read_notifications{"断开系统通知"}else{"连接系统通知"},self.settings.read_notifications,"set-listener"){self.pending.push(if self.settings.read_notifications{Cmd::DisconnectNotifications}else{Cmd::RequestNotifications});}
-                let status=c.fit(&self.listener_status,10.5,W::Regular,170.0);c.text(210.0,97.0,&status,10.5,W::Regular,theme::GRAY,H::Left);
             }
         }
         if before!=format!("{:?}",self.settings){self.settings.save();}
@@ -799,60 +693,6 @@ pub(crate) fn settings_label(ui:&mut egui::Ui,text:&str){
     ui.label(egui::RichText::new(text).size(11.5).color(settings_color(ctx,Color32::from_gray(185),Color32::from_gray(70))));
     ui.add_space(2.0);
 }
-fn support_author(ui:&mut egui::Ui){
-    let id=egui::Id::new("support-author-open");
-    let open=ui.ctx().data(|data|data.get_temp::<bool>(id).unwrap_or(false));
-    if !open {release_support_codes(ui.ctx());}
-    let dark=ui.visuals().dark_mode;
-    let accent=if dark{Color32::from_rgb(182,163,245)}else{Color32::from_rgb(105,77,163)};
-    ui.scope(|ui|{
-    ui.set_min_height(225.0);
-    if !open {
-    egui::Frame::new().fill(if dark{Color32::from_rgb(42,37,53)}else{Color32::from_rgb(239,233,250)})
-        .corner_radius(10.0).show(ui,|ui|{
-            ui.set_min_width(ui.available_width());
-            ui.vertical_centered(|ui|{
-                ui.add(egui::Image::new(egui::include_image!("../assets/support/capsuledock-coffee.svg")).fit_to_exact_size(egui::vec2(211.0,110.0)));
-            });
-        });
-    ui.add_space(9.0);
-    ui.label(egui::RichText::new("小唐维护 · 胶囊坞陪伴").size(10.5).color(accent));
-    ui.label(egui::RichText::new("请小唐喝杯咖啡").size(19.0).strong());
-    ui.label("胶囊坞陪你认真生活，\n你的支持，陪小唐把它慢慢做好。");
-    } else {
-        let ctx=ui.ctx().clone();
-        // 只解码一次并裁出二维码区域，按实际显示像素缩小：原图解码后两张合计约 17MB，缩小后不到 1MB。
-        let pixels=((180.0*ctx.pixels_per_point()).ceil() as u32).clamp(180,600);
-        ui.columns(2,|columns|{
-            for (i,(name,bytes,crop,color)) in [
-                ("微信支付",include_bytes!("../assets/support/support-wechat-original.jpg").as_slice(),[330.0,370.0,600.0],Color32::from_rgb(5,160,80)),
-                ("支付宝",include_bytes!("../assets/support/support-alipay-original.jpg").as_slice(),[200.0,660.0,860.0],Color32::from_rgb(22,120,255)),
-            ].into_iter().enumerate(){
-                let texture_id=egui::Id::new(("support-author-qr",i));
-                let texture=ctx.data_mut(|data|data.get_temp::<egui::TextureHandle>(texture_id)).filter(|texture|texture.size()==[pixels as usize;2]).unwrap_or_else(||{
-                    let image=support_code_image(bytes,crop,pixels);
-                    let texture=ctx.load_texture(name,image,egui::TextureOptions::LINEAR);
-                    ctx.data_mut(|data|data.insert_temp(texture_id,texture.clone()));texture
-                });
-                let uv=egui::Rect::from_min_max(egui::pos2(0.0,0.0),egui::pos2(1.0,1.0));
-                columns[i].vertical_centered(|ui|{
-                    ui.label(egui::RichText::new(name).color(color).strong());
-                    let side=ui.available_width().min(180.0);
-                    ui.add(egui::Image::new((texture.id(),egui::vec2(side,side))).uv(uv));
-                    ui.label(egui::RichText::new(if i==0{"打开微信扫一扫"}else{"打开支付宝扫一扫"}).size(11.0));
-                });
-            }
-        });
-    }
-    });
-    let button=egui::Button::new(egui::RichText::new(if open{"返回"}else{"请喝咖啡 · 支持作者"}).color(Color32::from_rgb(33,27,51)))
-        .fill(Color32::from_rgb(182,163,245)).corner_radius(8.0);
-    if ui.add_sized([ui.available_width(),32.0],button).clicked(){
-        ui.ctx().data_mut(|data|data.insert_temp(id,!open));
-    }
-    ui.add_space(7.0);
-    ui.label(egui::RichText::new("完全自愿 · 感谢每一份支持 · 不影响功能使用").size(11.0).color(ui.visuals().weak_text_color()));
-}
 pub(crate) fn settings_control_row(ui:&mut egui::Ui,title:&str,label_width:f32,controls:impl FnOnce(&mut egui::Ui)->egui::Response)->egui::Response{
     ui.horizontal(|ui|{
         // 同一张卡片里的控件左缘对齐：标签列至少 SETTINGS_LABEL_W。
@@ -900,7 +740,6 @@ const SETTINGS_GROUPS: [(&str,usize,usize);7] = [
 
 impl App {
     pub fn settings_ui(&mut self,ctx:&egui::Context,autostart:bool){
-        if !self.settings_open{release_support_codes(ctx);}
         self.updates.poll(ctx);
         self.updates.dialog_ui(ctx);
         if !self.settings_open{return;}
@@ -1213,34 +1052,6 @@ impl App {
                             ui.separator();
                             setting_row(ui,"胶囊坞提醒","在坞上显示专注和待办提醒",&mut self.settings.notifications);
                         });
-                        settings_label(ui,"微信提醒");
-                        settings_card(ui,|ui|{
-                            setting_row(ui,"微信新消息提醒","根据任务栏闪动提醒，不读取联系人或聊天正文",&mut self.settings.wechat_notifications);
-                            if self.settings.wechat_notifications {
-                                ui.separator();
-                                setting_row(ui,"托盘一键唤起微信","微信缩在托盘时，点提醒由系统按下微信托盘图标；图标收在折叠区时托盘菜单会短暂弹出",&mut self.settings.wechat_tray_open);
-                            }
-                            if !self.wechat_status.is_empty(){ui.label(egui::RichText::new(&self.wechat_status).size(12.0));}
-                        });
-                        settings_label(ui,"QQ 与 Windows 通知");
-                        settings_card(ui,|ui|{
-                            ui.label(egui::RichText::new(&self.listener_status).size(13.0));
-                            if self.settings.read_notifications {
-                                if ui.button(if self.settings.qq_only{"断开 QQ 通知"}else{"断开系统通知"}).clicked(){self.pending.push(Cmd::DisconnectNotifications);}
-                            }else{
-                                ui.horizontal_wrapped(|ui|{
-                                    if ui.button("只连接 QQ").clicked(){self.pending.push(Cmd::RequestQqNotifications);}
-                                    if ui.button("连接所有应用通知").clicked(){self.pending.push(Cmd::RequestNotifications);}
-                                });
-                            }
-                            ui.label(egui::RichText::new("QQ 需开启系统通知；新通知在坞上显示约 4.5 秒，默认隐藏正文。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
-                            ui.separator();
-                            setting_row(ui,"显示通知正文","可能包含私密消息；屏幕共享时建议关闭",&mut self.settings.notification_preview);
-                            ui.label(egui::RichText::new("只接收 Windows 通知中心可见的内容；应用会在收到通知后出现在下方。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
-                            let before_apps=self.notification_apps.items.clone();
-                            for (_,name,enabled) in &mut self.notification_apps.items {setting_row(ui,name,"",enabled);}
-                            if before_apps!=self.notification_apps.items{self.notification_apps.save();}
-                        });
                     }
                     _=>{
                         settings_label(ui,"胶囊坞 CapsuleDock");
@@ -1257,8 +1068,6 @@ impl App {
                                 ui.hyperlink_to("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/");
                             });
                         });
-                        settings_label(ui,"支持作者");
-                        settings_card(ui,support_author);
                     }
                     }
                 });
@@ -1268,38 +1077,4 @@ impl App {
             ctx.set_style(original_style);
         });
     }
-}
-
-/// 收款码只在「支持作者」卡片展开时占用贴图；收起卡片或关闭设置窗口即释放。
-fn release_support_codes(ctx:&egui::Context){
-    ctx.data_mut(|data|for i in 0..2usize {data.remove::<egui::TextureHandle>(egui::Id::new(("support-author-qr",i)));});
-}
-
-/// 从原图裁出二维码区域 `[x, y, 边长]` 并缩放到 `pixels` 见方。
-fn support_code_image(bytes:&[u8],crop:[f32;3],pixels:u32)->egui::ColorImage {
-    let image=image::load_from_memory(bytes).expect("内置收款码图片有效");
-    let side=(crop[2] as u32).min(image.width().saturating_sub(crop[0] as u32)).min(image.height().saturating_sub(crop[1] as u32));
-    let code=image.crop_imm(crop[0] as u32,crop[1] as u32,side,side).resize_exact(pixels,pixels,image::imageops::FilterType::Lanczos3).to_rgba8();
-    egui::ColorImage::from_rgba_unmultiplied([pixels as usize,pixels as usize],code.as_raw())
-}
-
-#[test]
-fn support_codes_are_cropped_small_and_released_when_hidden(){
-    for (bytes,crop) in [(include_bytes!("../assets/support/support-wechat-original.jpg").as_slice(),[330.0,370.0,600.0]),(include_bytes!("../assets/support/support-alipay-original.jpg").as_slice(),[200.0,660.0,860.0])] {
-        let image=support_code_image(bytes,crop,360);
-        assert_eq!(image.size,[360,360]);
-        assert!(image.pixels.len()*4<=600*1024,"每张收款码贴图应小于 0.6MB");
-        // 裁剪结果应是二维码本身：同时含有大量深色与浅色像素。
-        let dark=image.pixels.iter().filter(|p|p.r()<80).count() as f32/image.pixels.len() as f32;
-        assert!((0.2..0.8).contains(&dark),"裁剪区域不像二维码：深色占比 {dark}");
-    }
-    let ctx=egui::Context::default();
-    let _=ctx.run(Default::default(),|ctx|{
-        let texture=ctx.load_texture("qr",egui::ColorImage::new([4,4],Color32::WHITE),Default::default());
-        ctx.data_mut(|data|data.insert_temp(egui::Id::new(("support-author-qr",0usize)),texture));
-    });
-    assert_eq!(ctx.tex_manager().read().allocated().filter(|(_,meta)|meta.name=="qr").count(),1);
-    release_support_codes(&ctx);
-    let _=ctx.run(Default::default(),|_|{});
-    assert_eq!(ctx.tex_manager().read().allocated().filter(|(_,meta)|meta.name=="qr").count(),0,"收起后应释放收款码贴图");
 }

@@ -25,19 +25,17 @@ fn background_service_sample(){
     let service=std::env::var("CAPSULEDOCK_PERF_SERVICE").unwrap_or_else(|_|"idle".into());
     let context=eframe::egui::Context::default();
     let media=capsuledock::smtc::shared();
-    let(mut bluetooth,mut system,mut notifications)=(None,None,None);
+    let(mut bluetooth,mut system)=(None,None);
     match service.as_str(){
         "media"=>{capsuledock::smtc::spawn_poller(media.clone(),context);},
         "bluetooth"=>bluetooth=Some(capsuledock::bt::spawn()),
         "system"=>system=Some(capsuledock::system::observe(context,Default::default(),None)),
-        "notifications"=>notifications=Some(capsuledock::system::connect(context,false).expect("已有通知权限")),
         "idle"=>{},_=>panic!("未知采样服务"),
     }
     let before=sample();let started=Instant::now();
     while started.elapsed()<Duration::from_secs(20){
         if let Some(service)=&bluetooth{while service.rx.try_recv().is_ok(){}}
         if let Some(rx)=&system{while rx.try_recv().is_ok(){}}
-        if let Some(rx)=&notifications{while rx.try_recv().is_ok(){}}
         std::thread::sleep(Duration::from_millis(100));
     }
     let after=sample();

@@ -1,6 +1,4 @@
-//! Windows 状态采样与经用户授权的通知读取。
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+//! Windows 状态采样。
 use std::sync::mpsc::{self, Receiver};
 use windows::core::{Result, HSTRING, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
@@ -17,10 +15,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetLastInputInfo, LASTINPUTINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::UI::Notifications::Management::{
-    UserNotificationListener, UserNotificationListenerAccessStatus,
-};
-use windows::UI::Notifications::{NotificationKinds, UserNotification};
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
@@ -267,156 +261,6 @@ pub fn browser_at_top(island:HWND,settings:&crate::model::Settings)->Option<bool
     }
 }
 
-pub enum Incoming {
-    Revoked,
-    Status(String),
-    Message(String, String, String),
-}
-#[path="qq_toast_source.rs"]
-mod qq_toast_source;
-
-fn notification_identity(n:&UserNotification, number:u32, created:i64, known_qq:bool)->(String,String){
-    if known_qq{return ("QQ".into(),"QQ".into());}
-    let info=n.AppInfo().ok();
-    let id=info.as_ref().and_then(|app|app.AppUserModelId().ok()).map(|id|id.to_string()).unwrap_or_default();
-    if id.eq_ignore_ascii_case("QQ") || (id.is_empty() && qq_toast_source::matches(number,created)){
-        return ("QQ".into(),"QQ".into());
-    }
-    let name=info.and_then(|app|app.DisplayInfo().ok()).and_then(|display|display.DisplayName().ok())
-        .map(|name|name.to_string()).filter(|name|!name.trim().is_empty()).unwrap_or_else(||"Windows 通知".into());
-    let id=if id.is_empty(){name.clone()}else{id};
-    (name,id)
-}
-fn notification_body(n: &UserNotification) -> Result<String> {
-    let binding = n
-        .Notification()?
-        .Visual()?
-        .GetBinding(&HSTRING::from("ToastGeneric"))?;
-    let texts = binding.GetTextElements()?;
-    let mut parts = vec![];
-    for i in 0..texts.Size()?.min(8) {
-        parts.push(texts.GetAt(i)?.Text()?.to_string().chars().take(300).collect::<String>());
-    }
-    Ok(parts.join(" · "))
-}
-fn is_wechat_toast(app:&str,id:&str)->bool{
-    ["微信","WeChat","Weixin"].iter().any(|name|app.trim().eq_ignore_ascii_case(name))
-        || ["WeChat","Weixin","Tencent.WeChat","Tencent.Weixin"].iter().any(|name|id.eq_ignore_ascii_case(name))
-}
-/// 停止信号独立于消息队列，断开后结束等待，不再读取通知。
-pub struct Notifications {
-    incoming: Receiver<Incoming>,
-    stop: mpsc::Sender<()>,
-}
-impl Notifications {
-    pub fn try_recv(&self)->std::result::Result<Incoming,mpsc::TryRecvError>{self.incoming.try_recv()}
-}
-impl Drop for Notifications {fn drop(&mut self){let _=self.stop.send(());}}
-
-#[derive(Clone,Copy,PartialEq,Eq)]
-struct ToastVersion { created:i64, qq_body:Option<u64> }
-impl ToastVersion {
-    fn new(created:i64,qq_body:Option<&str>)->Self{
-        Self{created,qq_body:qq_body.map(|body|{let mut hash=std::collections::hash_map::DefaultHasher::new();body.hash(&mut hash);hash.finish()})}
-    }
-}
-#[derive(Default)]
-struct NotificationBaseline { previous: Option<HashMap<u32,ToastVersion>> }
-impl NotificationBaseline {
-    fn unchanged_other(&self,id:u32,created:i64)->Option<ToastVersion>{
-        self.previous.as_ref()?.get(&id).copied().filter(|old|old.created==created && old.qq_body.is_none())
-    }
-    fn changed(&self,id:u32,version:ToastVersion)->bool{
-        self.previous.as_ref().is_some_and(|old|old.get(&id)!=Some(&version))
-    }
-}
-
-fn qq_channel_status()->String{
-    use windows::UI::Notifications::{NotificationSetting,ToastNotificationManager};
-    match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("QQ")).and_then(|notifier|notifier.Setting()){
-        Ok(NotificationSetting::Enabled)=>"QQ 系统通知通道可用".into(),
-        Ok(NotificationSetting::DisabledForApplication)=>"QQ 系统通知已关闭，请在 Windows 通知设置中开启后重新连接".into(),
-        Ok(NotificationSetting::DisabledForUser)=>"Windows 系统通知已关闭，请开启后重新连接".into(),
-        Ok(NotificationSetting::DisabledByGroupPolicy)=>"系统策略禁止通知".into(),
-        _=>"QQ 系统通知通道未就绪，请检查 QQ 安装和通知设置后重新连接".into(),
-    }
-}
-
-/// 必须由窗口线程发起权限请求，后台仅读取新增或更新的通知。
-pub fn connect(ctx:eframe::egui::Context,qq_only:bool) -> Result<Notifications> {
-    let listener = UserNotificationListener::Current()?;
-    let request = listener.RequestAccessAsync()?;
-    let (tx, rx) = mpsc::sync_channel(32);
-    let (stop, stopped)=mpsc::channel();
-    std::thread::Builder::new().name("capsuledock-notifications".into()).spawn(move || {
-        let send=|event|{
-            let result=tx.send(event);
-            if result.is_ok(){ctx.request_repaint();}
-            result.is_ok()
-        };
-        let run = || -> Result<()> {
-            unsafe {windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED)}?;
-            struct Apartment;
-            impl Drop for Apartment {fn drop(&mut self){unsafe{windows::Win32::System::WinRT::RoUninitialize();}}}
-            let _apartment=Apartment;
-            if request.get()? != UserNotificationListenerAccessStatus::Allowed {
-                send(Incoming::Revoked);
-                send(Incoming::Status("Windows 未授予通知读取权限，可在系统设置中调整。".into()));
-                return Ok(());
-            }
-            let listener = UserNotificationListener::Current()?;
-            let qq_status=qq_channel_status();
-            let mut baseline=NotificationBaseline::default();
-            let mut last_status=String::new();
-            loop {
-                if stopped.try_recv()!=Err(mpsc::TryRecvError::Empty){return Ok(());}
-                if listener.GetAccessStatus()? != UserNotificationListenerAccessStatus::Allowed {
-                    send(Incoming::Revoked);
-                    send(Incoming::Status("通知权限已被关闭".into()));
-                    return Ok(());
-                }
-                let items=listener.GetNotificationsAsync(NotificationKinds::Toast)?.get()?;
-                let mut current=HashMap::new();
-                let mut messages=Vec::new();
-                for i in 0..items.Size()? {
-                    let Ok(n)=items.GetAt(i) else{continue};
-                    let (Ok(number),Ok(created))=(n.Id(),n.CreationTime()) else{continue};
-                    let created=created.UniversalTime;
-                    if let Some(old)=baseline.unchanged_other(number,created){current.insert(number,old);continue;}
-                    let known_qq=baseline.previous.as_ref().and_then(|old|old.get(&number)).is_some_and(|old|old.created==created && old.qq_body.is_some());
-                    let (app,id)=notification_identity(&n,number,created,known_qq);
-                    // 微信只走任务栏事件，即使客户端同时发送系统通知也不读取其正文。
-                    if (qq_only && id!="QQ") || is_wechat_toast(&app,&id){current.insert(number,ToastVersion::new(created,None));continue;}
-                    let qq=id=="QQ";
-                    // QQ 可能原地更新同一条通知；其他应用的启动历史不需要读取正文。
-                    let body=if qq || baseline.previous.is_some(){notification_body(&n).unwrap_or_default()}else{String::new()};
-                    let version=ToastVersion::new(created,qq.then_some(body.as_str()));
-                    current.insert(number,version);
-                    if baseline.changed(number,version){
-                        let body=if qq && body.trim().is_empty(){"有新消息".into()}else{body};
-                        if !body.trim().is_empty(){messages.push((created,app,id,body));}
-                    }
-                }
-                baseline.previous=Some(current);
-                messages.sort_by_key(|item|item.0);
-                for (_,app,id,body) in messages {
-                    if !send(Incoming::Message(app,id,body)){return Ok(());}
-                }
-                let status=if qq_only{format!("仅监听 QQ · {qq_status}")}else{format!("正在监听 Windows 通知 · 当前可见 {} 条\n{qq_status}",items.Size()?)};
-                if status!=last_status {
-                    if !send(Incoming::Status(status.clone())){return Ok(());}
-                    last_status=status;
-                }
-                if stopped.recv_timeout(std::time::Duration::from_secs(1))!=Err(mpsc::RecvTimeoutError::Timeout){return Ok(());}
-            }
-        };
-        if let Err(e) = run() {
-            send(Incoming::Status(format!("Windows 暂不允许读取通知：{}。请检查通知访问权限与应用身份。",e.code())));
-        }
-    }).map_err(|_|windows::core::Error::from_win32())?;
-    Ok(Notifications{incoming:rx,stop})
-}
-
 pub fn pick_files() -> Result<Vec<std::path::PathBuf>> {
     pick_files_for("添加文件到置物架",true)
 }
@@ -486,26 +330,6 @@ pub fn drag_file(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn notifications_skip_history_but_detect_reused_ids_and_updated_content(){
-        let mut baseline=NotificationBaseline::default();
-        let first=ToastVersion::new(10,Some("第一条"));
-        assert!(!baseline.changed(1,first));
-        baseline.previous=Some(HashMap::from([(1,first),(2,ToastVersion::new(10,None))]));
-        assert!(!baseline.changed(1,first));
-        assert!(baseline.changed(1,ToastVersion::new(10,Some("第二条"))));
-        assert!(baseline.changed(1,ToastVersion::new(11,Some("第一条"))));
-        assert!(baseline.unchanged_other(2,10).is_some());
-        assert!(baseline.unchanged_other(1,10).is_none());
-        assert!(baseline.unchanged_other(2,11).is_none());
-        baseline.previous=Some(HashMap::new());assert!(baseline.changed(1,first));
-    }
-    #[test]
-    fn notifications_disconnect_signals_stop_without_waiting_for_new_messages(){
-        let (_tx,incoming)=mpsc::sync_channel(32);let (stop,stopped)=mpsc::channel();
-        drop(Notifications{incoming,stop});
-        assert_eq!(stopped.try_recv(),Ok(()));
-    }
     #[test]
     fn browser_minimal_recognizes_browsers_without_matching_electron_apps(){
         for name in ["chrome.exe","MSEDGE.EXE","firefox.exe","brave.exe","zen.exe","QQBrowser.exe","quark.exe","Quark.exe","QUARK.EXE"] {

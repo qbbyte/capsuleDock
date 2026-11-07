@@ -118,40 +118,16 @@ impl Env {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Messenger { Wechat, Qq }
-impl Messenger {
-    pub fn name(self)->&'static str {match self {Self::Wechat=>"微信",Self::Qq=>"QQ"}}
-}
-
-/// 一条未读：来源、账号所在进程（QQ 通知分不出账号，记为 0）和发出提醒的窗口（没有时为 0）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Unread { pub source: Messenger, pub pid: u32, pub window: isize }
-impl Unread {
-    pub fn of(source: Messenger) -> Self { Self { source, pid: 0, window: 0 } }
-}
-
-/// 展开后未读胶囊的宽度、离面板的间距和每个图标占的高度。
-pub(crate) const UNREAD_W: f32 = 40.0;
-pub(crate) const UNREAD_GAP: f32 = 8.0;
-pub(crate) const UNREAD_SLOT: f32 = 36.0;
-/// 收起时两个来源图标的间距：并排各占一格，不叠放。
-fn unread_step(_horizontal: bool) -> f32 { 22.0 }
-
 /// 交给外壳执行的副作用。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     Media(Transport),
     Open(PathBuf),
-    ViewMessenger(Unread),
     /// 需要键盘输入：外壳应让窗口可激活并取得焦点。
     Focus,
     Reveal(PathBuf),
     Copy(String),
     Notify(String, String),
-    RequestNotifications,
-    RequestQqNotifications,
-    DisconnectNotifications,
     ToggleAutostart,
     AddFiles,
     DragFile(PathBuf),
@@ -482,17 +458,12 @@ pub struct App {
     pub(crate) settings_focus_requested:bool,
     pub(crate) settings_tab:usize,
     pub(crate) settings_category:usize,
-    pub wechat_status:String,
-    pub(crate) notification_apps:model::NotificationApps,
     pub(crate) subpage:Option<usize>,
-    pub listener_status: String,
     // 通知/告警队列：当前告警、HUD 告警、待出队队列、去重历史、铃铛计时，收口在子模块。
     pub(crate) notices: crate::notice::NoticeStack,
     hud_alpha: f32,
     notice_width: Spring,
     notice_details: bool,
-    pub pending_messengers:Vec<Unread>,
-    messenger_scroll: f32,
     pub(crate) pending: Vec<Cmd>,
     pub(crate) todo_first: usize,
     pub(crate) pet: crate::pet::Pet,
@@ -569,9 +540,8 @@ impl App {
             media_anchor: (String::new(), 0.0, 0.0, false),
             media: NowPlaying::default(),
             music_artwork: None,
-            forced_open_until:0.0, settings_open:false, displays:Vec::new(), browser_at_top:false, browser_minimal_active:false, glass_tint:0.0, fluid:Default::default(), fluid_origin:Pos2::ZERO, fluid_art:None, fluid_title:String::new(), screen:None, settings_focus_requested:false, settings_tab:0, settings_category:0, wechat_status:String::new(), notification_apps:model::NotificationApps::load(), subpage:None,
-            listener_status: "尚未连接".into(),
-            notices: crate::notice::NoticeStack::new(), hud_alpha: 0.0, notice_width:Spring::new(0.0,CLOSE.0,CLOSE.1), notice_details:false, pending_messengers:Vec::new(), messenger_scroll:0.0, pending: vec![],
+            forced_open_until:0.0, settings_open:false, displays:Vec::new(), browser_at_top:false, browser_minimal_active:false, glass_tint:0.0, fluid:Default::default(), fluid_origin:Pos2::ZERO, fluid_art:None, fluid_title:String::new(), screen:None, settings_focus_requested:false, settings_tab:0, settings_category:0, subpage:None,
+            notices: crate::notice::NoticeStack::new(), hud_alpha: 0.0, notice_width:Spring::new(0.0,CLOSE.0,CLOSE.1), notice_details:false, pending: vec![],
             todo_first: 0, pet: Default::default(),
             toast: None, toast_below: false,
             last_input: 0.0, system_idle: None,
@@ -712,7 +682,7 @@ impl App {
             && lyric_key_matches(&self.ly.key,&self.media)
             && self.ly.lyrics.as_ref().is_some_and(|lyrics|lyrics.synced && lyrics.lines.iter().any(|line|!line.text.trim().is_empty()))
     }
-    pub(crate) fn compact_notices(&self)->bool {self.island_lyrics_active()&&!self.morph.open&&!self.notices.notice.as_ref().is_some_and(|a|self.settings.notification_preview&&matches!(a.source,crate::extras::AlertSource::External(_)))}
+    pub(crate) fn compact_notices(&self)->bool {self.island_lyrics_active()&&!self.morph.open}
 
     /// 换句、分段和展开高亮共用时间调整；正数延后，负数提前。
     pub(crate) fn lyric_position(&self)->f32 {(self.media.position-self.settings.lyric_delay_ms as f64/1000.0)as f32}
@@ -779,7 +749,7 @@ impl App {
         }
         if self.side() {
             // 左右停靠：竖向胶囊（通知仍是贴边滑出的横向卡片，见上）。
-            return self.side_base_size(self.effective_minimal()&&self.t>=self.notices.notification_bell_until&&(self.browser_minimal_active||self.pending_messengers.is_empty()));
+            return self.side_base_size(self.effective_minimal()&&self.t>=self.notices.notification_bell_until);
         }
         if self.island_lyrics_active() {
             (self.lyric_bar_width(),BAR_H)
@@ -848,7 +818,7 @@ impl App {
         if let Some(a)=&hud_active {self.notices.hud_notice=Some(a.clone());}
         self.hud_alpha=anim::approach(self.hud_alpha,if hud_active.is_some(){1.0}else{0.0},if hud_active.is_some(){16.0}else{8.0},dt);
         if hud_active.is_none() && self.hud_alpha<0.003 {self.notices.hud_notice=None;}
-        let notice_target=if !self.notices.current_is_messenger() && self.compact_notices()&&(self.notices.notice.is_some()||self.t<self.notices.notification_bell_until) {44.0}else{0.0};
+        let notice_target=if self.compact_notices()&&(self.notices.notice.is_some()||self.t<self.notices.notification_bell_until) {44.0}else{0.0};
         self.notice_width.target=notice_target;
         if self.compact_notices(){self.notice_width.step(dt);}else{self.notice_width.snap(0.0);self.notice_details=false;}
         self.update_media(env,&ctx);
@@ -904,7 +874,7 @@ impl App {
         let hit = if side {self.side_hit_rect(win,p_prev)} else {self.hit_rect(cx, top, p_prev)};
         let previous_menu=self.shelf_view.shelf_menu_rect.take();
         let inside = env.cursor.is_some_and(|c| hit.contains(c) || previous_menu.is_some_and(|r|r.contains(c)));
-        let on_notice=env.cursor.is_some_and(|c|self.messenger_badge_rect(win,self.island_rect(win,self.morph.w.pos,self.morph.h.pos)).is_some_and(|r|r.contains(c)) || self.notice_rect(cx,top).is_some_and(|r|r.contains(c))||self.notice_details_rect(cx,top).is_some_and(|r|r.contains(c)));
+        let on_notice=env.cursor.is_some_and(|c|self.notice_rect(cx,top).is_some_and(|r|r.contains(c))||self.notice_details_rect(cx,top).is_some_and(|r|r.contains(c)));
         if !inside {
             self.morph.hover_lock = false;
         }
@@ -964,10 +934,7 @@ impl App {
         let p = self.progress();
         let (w, h) = (self.morph.w.pos, self.morph.h.pos);
         let panel = self.island_rect(win, w, h);
-        let messenger_rect=self.messenger_badge_rect(win,panel);
-        let appear=self.messenger_appear();
-        let outside_badge=messenger_rect.filter(|_|appear>0.02);
-        let body=messenger_rect.filter(|_|outside_badge.is_none()).map_or(panel,|badge|panel.union(badge));
+        let body=panel;
         let pc = anim::clamp01(p);
         let painter = ui.painter_at(ui.max_rect().expand(40.0));
         let feather = 1.0 / ctx.pixels_per_point();
@@ -991,11 +958,6 @@ impl App {
         let notice_rect=self.notice_rect(cx,top);
         let notice_shape=notice_rect.map(|r|Rect::from_min_max(Pos2::new(r.left()-36.0,r.top()),r.max));
         if let Some(r)=notice_shape {island_shadow(r,5.0,8.0,12.5,0.5*shadow_k);}
-        if let Some(r)=outside_badge{
-            let appear=self.messenger_appear();
-            painter.rect_filled(r,r.width()/2.0,paint::alpha(self.glass_fill(),appear));
-            if glass_skin {painter.rect_stroke(r,r.width()/2.0,egui::Stroke::new(1.0_f32,paint::alpha(self.glass_rim(),appear)),egui::StrokeKind::Inside);}
-        }
         if self.settings.skin==model::Skin::Fluid {
             self.fluid_origin=body.min;
             let art=self.music_artwork.as_ref().map(|(_,texture)|texture.id());
@@ -1059,19 +1021,6 @@ impl App {
                 if c.hit(6.0,0.0,28.0,30.0,"bell").clicked(){self.show_page(TODO_PAGE);}
             }
         }
-        if let Some(rect)=messenger_rect {
-            let from=crate::skin_paint::shape_count(&ctx,layer);
-            let c=Card::new(ui,rect.min,rect.intersect(ui.max_rect()));
-            if outside_badge.is_some() {
-                let c=c.scaled(0.0,0.0,appear);
-                self.draw_unread_capsule(&ctx,&c,rect,env.cursor,&mut cmds);
-            }else{
-                let horizontal=!(self.side() && self.notices.notice.is_none());
-                let scale=self.messenger_stack_appear();
-                self.draw_unread_stack(&c.scaled(0.0,0.0,scale).faded(scale),horizontal,&mut cmds);
-            }
-            keep_colors.push((from,crate::skin_paint::shape_count(&ctx,layer)));
-        }
         let notice_details=self.notice_details_rect(cx,top);
         if let Some(rect)=notice_details {
             let radius=10.0;
@@ -1132,7 +1081,6 @@ impl App {
             let (bw, bh) = self.base_size();
             Rect::from_center_size(Pos2::new(cx, top + (bh * SWELL.1 + 12.0) / 2.0), Vec2::new(bw * SWELL.0 + 24.0, bh * SWELL.1 + 12.0))
         };
-        if let Some(r)=messenger_rect{region=region.union(r.expand(5.0));}
         if let Some(rect)=notice_shape {region=region.union(rect.expand2(Vec2::new(12.0,8.0)));}
         if let Some(rect)=notice_details {region=region.union(rect.expand(12.0));}
         // 胶囊上方留空的那一小条也要在窗口区域内，阴影才不会被截断。
@@ -1160,7 +1108,6 @@ impl App {
             let outline=|r:Rect,flare:f32,flare_h:f32,radius:f32| if pill {GlassShape::Round(rel(r),radius.min(r.height().min(r.width())*0.5))}
                 else if side {GlassShape::Docked{rect:rel(r),dock,flare,flare_h,radius}} else {GlassShape::Notch{rect:rel(r),flare,flare_h,radius}};
             let mut shapes=vec![outline(body,flare,flare_h,radius)];
-            if let Some(r)=outside_badge{shapes.push(GlassShape::Round(rel(r),r.width()/2.0));}
             if let Some(r)=notice_shape {shapes.push(outline(r,5.0,8.0,12.5));}
             if let Some(r)=notice_details {
                 let radius=10.0;
@@ -1197,7 +1144,7 @@ impl App {
             region: rel(floating_toast.into_iter().chain(self.shelf_view.shelf_menu_rect.map(|r|r.union(r + ctx.style().visuals.popup_shadow.margin()).expand(1.0 / ctx.pixels_per_point()))).fold(region,Rect::union).intersect(ui.max_rect())),
             glass: glass_region,
             hit: rel(if side {self.side_hit_rect(win,self.progress())} else {self.hit_rect(cx, top, self.progress())}),
-            notice_hit:notice_shape.into_iter().chain(notice_details).chain(messenger_rect).chain(self.shelf_view.shelf_menu_rect).reduce(|a,b|a.union(b)).map(rel),
+            notice_hit:notice_shape.into_iter().chain(notice_details).chain(self.shelf_view.shelf_menu_rect).reduce(|a,b|a.union(b)).map(rel),
             file_drop_zone:self.settings.visible_pages[2].then(||rel(if side {self.island_rect(win,PW,self.expanded_height())} else {Rect::from_min_size(Pos2::new(cx-PW/2.0,top),Vec2::new(PW,96.0))})),
             expanded: self.morph.open,
             editing: self.is_editing(),
@@ -1230,145 +1177,6 @@ impl App {
         }
     }
 
-    /// 展开后未读胶囊的出现程度：面板基本展开后从面板旁淡入。
-    pub(crate) fn messenger_appear(&self)->f32 {
-        if self.todo.task_dialog.is_some(){return 0.0;}
-        smoothstep(0.0,1.0,anim::clamp01((self.progress()-0.7)/0.3))
-    }
-    fn messenger_stack_appear(&self)->f32 {1.0-smoothstep(0.04,0.30,self.progress())}
-    /// 同一来源有多个账号时给图标编号（1、2…）；只有一个账号不编号。
-    pub(crate) fn unread_tag(&self,i:usize)->Option<usize>{
-        let source=self.pending_messengers.get(i)?.source;
-        let same=self.pending_messengers.iter().filter(|u|u.source==source).count();
-        (same>1).then(||self.pending_messengers[..=i].iter().filter(|u|u.source==source).count())
-    }
-    fn unread_id(&self,i:usize)->String{
-        let name=self.pending_messengers[i].source.name();
-        match self.unread_tag(i){Some(n) if n>1=>format!("{name}{n}"),_=>name.to_string()}
-    }
-    /// 展开胶囊高度：一个是圆，两个是短胶囊，三个及以上与面板等高（多出的滚动）。
-    fn unread_capsule_height(&self,panel_h:f32)->f32 {
-        let n=self.pending_messengers.len();
-        if n>=3 {panel_h} else {4.0+UNREAD_SLOT*n as f32}
-    }
-    pub(crate) fn unread_top_inset(&self)->f32 {if self.dock()==model::Dock::Top {UNREAD_GAP}else{0.0}}
-    fn unread_slot(&self,height:f32)->f32 {
-        if self.pending_messengers.len()>=3 {(height-4.0)/3.0} else {UNREAD_SLOT}
-    }
-    /// 收起时叠放的来源图标（最多两个）。
-    fn unread_sources(&self)->Vec<Messenger>{
-        let mut sources=Vec::new();
-        for u in &self.pending_messengers {if !sources.contains(&u.source){sources.push(u.source);}}
-        sources
-    }
-    /// 收起时叠放区沿胶囊方向的长度。
-    fn unread_stack_len(&self,horizontal:bool)->f32 {
-        let icons=self.unread_sources().len().min(2) as f32;
-        32.0+unread_step(horizontal)*(icons-1.0)
-    }
-
-    fn messenger_badge_rect(&self,win:Rect,panel:Rect)->Option<Rect>{
-        if self.pending_messengers.is_empty() || self.browser_minimal_active && !self.morph.open {return None;}
-        // 完整横幅已包含该来源图标。歌词模式和横幅收起后使用常驻入口。
-        if !self.morph.open && !self.compact_notices() && self.pending_messengers.len()==1
-            && self.notices.notice.as_ref().and_then(|a|a.messenger())==self.pending_messengers.first().map(|u|u.source){return None;}
-        let bounds=self.screen.map_or(win,|screen|screen.intersect(win));
-        let appear=self.messenger_appear();
-        if appear>0.02 {
-            // 展开：贴在面板外侧、顶端对齐的竖向胶囊；顶部停靠和左停靠在右边，右停靠在左边。
-            let full=self.island_rect(win,PW,self.expanded_height());
-            // 顶部停靠时面板贴着屏幕上沿，胶囊往下让一点，圆顶不会被屏幕边切掉。
-            let inset=self.unread_top_inset();
-            let height=self.unread_capsule_height(full.height()-inset);
-            let left=self.dock()==model::Dock::Right || self.dock()==model::Dock::Top && full.right()+UNREAD_GAP+UNREAD_W>bounds.right();
-            let width=UNREAD_W*appear;
-            let x=if left {panel.left()-UNREAD_GAP*appear-width}else{panel.right()+UNREAD_GAP*appear};
-            return Some(Rect::from_min_size(Pos2::new(x,panel.top()+inset),Vec2::new(width,height*appear)));
-        }
-        let scale=self.messenger_stack_appear();
-        if scale<0.02 || self.morph.open && self.todo.task_dialog.is_some(){return None;}
-        let side_column=self.side() && self.notices.notice.is_none();
-        let length=self.unread_stack_len(!side_column);
-        let (width,height)=if side_column {(32.0,length)}else{(length,BAR_H)};
-        let (width,height)=(width*scale,height*scale);
-        let (x,y)=if side_column {
-            (panel.center().x-width/2.0,panel.bottom())
-        }else{
-            let right=panel.right()+self.notice_width.pos;
-            let y=if self.notices.notice.is_some() && !self.compact_notices(){panel.center().y-BAR_H/2.0}else{panel.top()};
-            (if right+width<=bounds.right(){right}else{panel.left()-width},y)
-        };
-        Some(Rect::from_min_size(Pos2::new(x,y),Vec2::new(width,height)))
-    }
-
-    /// 展开后的未读胶囊：每个账号一个图标，点击跳到对应窗口；超过三个时滚轮翻看。
-    fn draw_unread_capsule(&mut self,ctx:&egui::Context,c:&Card,rect:Rect,cursor:Option<Pos2>,cmds:&mut Vec<Cmd>){
-        let n=self.pending_messengers.len();
-        let height=rect.height()/c.s;
-        let slot=self.unread_slot(height);
-        let max_scroll=(n as f32-3.0).max(0.0)*slot;
-        if max_scroll>0.0 && cursor.is_some_and(|p|rect.contains(p)) {
-            let delta=ctx.input(|i|i.raw_scroll_delta.y);
-            self.messenger_scroll-=delta*0.5;
-        }
-        self.messenger_scroll=self.messenger_scroll.clamp(0.0,max_scroll);
-        let c=c.faded(self.messenger_appear());
-        let inner=c.clipped(0.0,2.0,UNREAD_W,height-4.0);
-        let x=UNREAD_W/2.0;
-        for i in 0..n {
-            let u=self.pending_messengers[i];
-            let cy=2.0+slot*(i as f32+0.5)-self.messenger_scroll;
-            if cy< -slot || cy>height+slot {continue;}
-            let scale=if u.source==Messenger::Wechat {1.0}else{1.12};
-            crate::extras::messenger_icon(&inner.scaled(x,cy,scale),x,cy,u.source);
-            inner.circle(x+10.0,cy-9.0,2.6,Color32::from_rgb(255,72,72));
-            if let Some(tag)=self.unread_tag(i){
-                inner.circle(x+10.0,cy+8.5,6.0,Color32::from_gray(238));
-                inner.centered_text(x+10.0,cy+8.5,&tag.to_string(),8.5,W::Bold,Color32::from_gray(28),H::Center);
-            }
-            let name=match self.unread_tag(i){Some(n)=>format!("{} · 账号 {n}",u.source.name()),None=>u.source.name().to_string()};
-            let button=inner.hit(0.0,cy-slot/2.0,UNREAD_W,slot,self.unread_id(i)).on_hover_text(format!("查看{name}"));
-            if button.clicked(){cmds.push(Cmd::ViewMessenger(u));}
-        }
-        if max_scroll>0.0 {
-            // 还有没露出的图标：上下边缘各一条淡淡的指示。
-            let ink=paint::alpha(theme::WHITE,0.35);
-            if self.messenger_scroll>0.5 {c.fill(x-6.0,4.0,12.0,2.0,1.0,ink);}
-            if self.messenger_scroll<max_scroll-0.5 {c.fill(x-6.0,height-6.0,12.0,2.0,1.0,ink);}
-        }
-    }
-
-    /// 收起时的未读入口：每个来源一个图标加小红点（同一来源多个账号合成一个）。只有一条时点它直接跳转，多条时展开面板挑选。
-    fn draw_unread_stack(&mut self,c:&Card,horizontal:bool,cmds:&mut Vec<Cmd>){
-        let sources=self.unread_sources();
-        let count=self.pending_messengers.len();
-        let icons=sources.len().min(2);
-        let step=unread_step(horizontal);
-        let at=|k:usize|if horizontal {(16.0+step*k as f32,14.0)}else{(16.0,14.0+step*k as f32)};
-        for k in 0..icons {
-            let (x,y)=at(k);
-            let scale=if sources[k]==Messenger::Wechat {0.85}else{0.92};
-            crate::extras::messenger_icon(&c.scaled(x,y,scale),x,y,sources[k]);
-        }
-        // 每个来源图标右上角一个小红点，不显示数字。
-        for k in 0..icons {let (x,y)=at(k);c.circle(x+8.0,y-7.0,2.6,Color32::from_rgb(255,59,48));}
-        let (w,h)=if horizontal {(self.unread_stack_len(true),BAR_H)}else{(32.0,self.unread_stack_len(false))};
-        if count==1 {
-            let u=self.pending_messengers[0];
-            let button=c.hit(0.0,0.0,w,h,u.source.name()).on_hover_text(format!("查看{}",u.source.name()));
-            if button.clicked(){cmds.push(Cmd::ViewMessenger(u));}
-        }else{
-            let button=c.hit(0.0,0.0,w,h,"messenger-stack").on_hover_text(format!("{count} 条未读 · 展开挑选"));
-            if button.clicked(){self.reveal_unread();}
-        }
-    }
-    /// 展开面板，让旁边的未读胶囊露出来。
-    pub(crate) fn reveal_unread(&mut self){
-        self.notices.notice=None;
-        self.morph.open=true; self.forced_open_until=self.t+4.0;
-        self.morph.w.tune(OPEN_W.0,OPEN_W.1);self.morph.h.tune(OPEN_H.0,OPEN_H.1);
-        self.morph.w.target=PW;self.morph.h.target=self.expanded_height();
-    }
     fn notice_rect(&self,cx:f32,top:f32)->Option<Rect>{
         if !self.compact_notices(){return None;}
         let width=self.notice_width.pos-8.0;
