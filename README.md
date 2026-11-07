@@ -1,19 +1,19 @@
-# 胶囊坞 CapsuleDock
+<div align="center">
+  <img src="assets/capsuledock-logo.png" alt="胶囊坞" width="180">
+  <h1>胶囊坞 CapsuleDock</h1>
+  <p>Windows 顶部的桌面伙伴与信息坞</p>
+</div>
 
-> Windows 顶部的桌面伙伴与信息坞。
-
-胶囊坞常驻在屏幕顶部，鼠标靠近时展开功能面板。它把音乐控制、专注计时、置物架、待办提醒和系统通知整合进一个收起时只剩刘海或胶囊形状的小坞，配合桌面吉祥物和实时毛玻璃效果。
-
-![胶囊坞](assets/capsuledock-logo.png)
+胶囊坞常驻在屏幕顶部，鼠标靠近时展开功能面板。它把音乐控制、专注计时、置物架、待办提醒和系统状态整合进一个收起时只剩刘海或胶囊形状的小坞，配合桌面吉祥物和实时毛玻璃效果。
 
 ## 功能
 
 - **顶部的灵动坞**：收起时是屏幕顶部一条刘海或胶囊，鼠标靠近展开面板；支持顶部、左侧、右侧三种停靠，自动避让盖住边缘的全屏应用。
 - **音乐与歌词**：兼容网易云音乐、酷狗音乐、汽水音乐等本机播放器，显示同步歌词和专辑封面；支持坞上歌词（仅顶部停靠）。
 - **专注与休息**：番茄钟式计时，专注结束后进入休息阶段。
-- **置物架**：收藏常用文件路径，新增「剪贴板」分栏记录最近 30 条复制内容，可固定常用项；历史保存在本机。
+- **置物架**：收藏常用文件路径，「剪贴板」分栏记录最近 30 条复制内容，可固定常用项；历史保存在本机。
 - **待办与提醒**：任务提醒，支持每周按周几重复，到点提醒并在通知里定位到对应任务。
-- **通知**：微信 / QQ 未读消息在面板外侧以胶囊形式展示，点击跳转到对应账号窗口；验证码自动识别并给敏感内容打码。
+- **系统状态**：坞内常驻 CPU / 内存占用圆环，以及电量、蓝牙设备连接提醒。
 - **桌面吉祥物**：可切换的桌面宠物，跟随配色和大小换色。
 - **可定制外观**：五种配色（经典、奶油、毛玻璃·浅、毛玻璃·深、悬浮云）× 两种形状（刘海、胶囊），坞体大小 80%–140% 可调，水平位置可调。毛玻璃使用 Windows 合成引擎的实时模糊。
 
@@ -83,7 +83,7 @@ cargo run --locked --bin capsuledock
 cargo test --locked --all-targets --features record -- --test-threads=1
 ```
 
-常规测试使用合成数据；标记为 `#[ignore]` 的测试需要本机真实的微信 / QQ 窗口，按需显式运行。
+常规测试使用合成数据；个别标记为 `#[ignore]` 的测试依赖特定系统环境，按需显式运行。
 
 ## 项目结构
 
@@ -93,12 +93,12 @@ cargo test --locked --all-targets --features record -- --test-threads=1
 | `src/lib.rs` `src/app.rs` `src/pages.rs` | 状态机与主界面、功能页面 |
 | `src/model.rs` `src/lyrics.rs` `src/smtc.rs` `src/icons.rs` | 数据、歌词、系统媒体、文件图标 |
 | `src/native.rs` `src/system.rs` `src/tray.rs` | 原生窗口、命中穿透、拖放、托盘 |
-| `src/otp.rs` `src/code_mask.rs` | 验证码识别与通知打码 |
+| `src/notice.rs` `src/extras.rs` | 通知与告警队列、设置界面 |
 | `src/ui_tests.rs` | 无窗口交互与布局回归测试 |
 | `src/bin/capsuledock-record` | 合成数据演示与软件渲染器 |
 | `vendor/` | 少量必要的上游补丁（基于 eframe 0.31，修复 Windows WGL 上下文切换） |
 | `installer/` `scripts/` | 安装、卸载与打包 |
-| `assets/` | 图标、皮肤素材与收款码 |
+| `assets/` | 图标与皮肤素材 |
 
 ## 隐私
 
@@ -112,6 +112,10 @@ cargo test --locked --all-targets --features record -- --test-threads=1
 ## 许可
 
 本项目原创代码采用 [MIT 许可](LICENSE)。第三方依赖、字体、图标及品牌标识遵循各自许可，MIT 不授予第三方商标权；完整归属与许可文本见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
+
+## 致谢
+
+- 感谢开源项目 [CapsuleDock](https://github.com/Renly1994/CapsuleDock) 为本项目提供了基础。
 
 ## 更新记录
 
