@@ -30,6 +30,7 @@ static HIT: OnceLock<Mutex<Vec<(i32, i32, i32, i32)>>> = OnceLock::new();
 static FG_CHANGED: AtomicBool = AtomicBool::new(false);
 /// 串行化所有会改写 `HIT` 命中区的测试，避免并行运行时互相踩踏（同一进程内
 /// 共享 `HIT`，一个测试在窗口子类里读 `HIT` 时若被另一个测试的 mem::replace 打断就会误判）。
+#[cfg(test)]
 static HIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // `WS_EX_NOREDIRECTIONBITMAP` 只能在 CreateWindowEx 时设置（运行时 SetWindowLongPtrW

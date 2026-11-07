@@ -23,22 +23,6 @@ pub fn config_dir() -> PathBuf {
     env_dir("APPDATA").join("CapsuleDock")
 }
 
-/// 把旧版本的数据目录（`%APPDATA%\Daozai`）平滑迁移到新名 `%APPDATA%\CapsuleDock`。
-/// 仅在新目录还不存在、且旧目录存在时迁移一次：把旧目录整体重命名为新目录，
-/// 这样老用户升级后仍能看到原来的设置、待办和置物清单。若两个目录都已存在或都不存在，则什么都不做。
-pub fn migrate_legacy_data_dir() {
-    let appdata = env_dir("APPDATA");
-    let legacy = appdata.join("Daozai");
-    let current = appdata.join("CapsuleDock");
-    if current.exists() || !legacy.exists() {
-        return;
-    }
-    if let Some(parent) = current.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = fs::rename(&legacy, &current);
-}
-
 /// 饮水与日程下线后，清掉旧版本留下的数据文件。凭据管理器里的日历密码属于用户，
 /// 由用户自行处理，程序不碰。
 pub fn purge_removed_feature_data() {

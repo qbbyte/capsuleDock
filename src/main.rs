@@ -600,7 +600,6 @@ fn open_path(_p: &std::path::Path)->Result<(),String> {Ok(())}
 
 fn main() -> std::process::ExitCode {
     diagnostics::install();
-    capsuledock::model::migrate_legacy_data_dir();
     capsuledock::model::purge_removed_feature_data();
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,

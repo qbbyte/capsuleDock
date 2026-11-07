@@ -2,9 +2,9 @@
 use eframe::egui;
 use std::{io::{Read, Write}, path::PathBuf, sync::{mpsc::{self, Receiver}, Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 
-const REPOSITORY: &str = "https://github.com/Renly1994/CapsuleDock";
-const API: &str = "https://api.github.com/repos/Renly1994/CapsuleDock/releases/latest";
-const RELEASES: &str = "https://github.com/Renly1994/CapsuleDock/releases/latest";
+const REPOSITORY: &str = "https://github.com/qbbyte/capsuleDock";
+const API: &str = "https://api.github.com/repos/qbbyte/capsuleDock/releases/latest";
+const RELEASES: &str = "https://github.com/qbbyte/capsuleDock/releases/latest";
 const BACKUP_DOWNLOAD: &str = "https://hcnounojrizu.feishu.cn/wiki/MpfXwFGf8ijhitkfuxdcELdBnqg";
 
 #[derive(Clone, Debug)]
