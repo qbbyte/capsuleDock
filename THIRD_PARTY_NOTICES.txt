@@ -24,7 +24,7 @@ https://github.com/emilk/egui
 回移上游提交 983155456c964fcc92c951ed6b1c721cc24a205c 的绘图上下文复用修复。
 https://github.com/emilk/egui/commit/983155456c964fcc92c951ed6b1c721cc24a205c
 
-Copyright (c) 2018-2021 Emil Ernerfeldt <emil.ernerfeldt@gmail.com>
+Copyright (c) 2018-2021 Emil Ernerfeldt
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -457,7 +457,7 @@ LICENSE
 项目: https://github.com/oyvindln/adler2
 
 LICENSE-0BSD
-Copyright (C) Jonas Schievink <jonasschievink@gmail.com>
+Copyright (C) Jonas Schievink
 
 Permission to use, copy, modify, and/or distribute this software for
 any purpose with or without fee is hereby granted.
@@ -1487,7 +1487,7 @@ SOFTWARE.
 项目: https://github.com/droundy/arrayref
 
 LICENSE
-Copyright (c) 2015 David Roundy <roundyd@physics.oregonstate.edu>
+Copyright (c) 2015 David Roundy
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -8114,7 +8114,7 @@ limitations under the License.
 
 
 LICENSE-MIT
-Copyright (c) 2020 Olivier Goffart <ogoffart@sixtyfps.io>
+Copyright (c) 2020 Olivier Goffart
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -8846,7 +8846,7 @@ limitations under the License.
 
 
 LICENSE-MIT
-Copyright (c) 2018-2021 Emil Ernerfeldt <emil.ernerfeldt@gmail.com>
+Copyright (c) 2018-2021 Emil Ernerfeldt
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -32056,7 +32056,7 @@ limitations under the License.
 
 LICENSE-ISC
 ISC License (ISC)
-Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>
+Copyright (c) 2016, Joseph Birr-Pixton
 
 Permission to use, copy, modify, and/or distribute this software for
 any purpose with or without fee is hereby granted, provided that the
@@ -32073,7 +32073,7 @@ THIS SOFTWARE.
 
 
 LICENSE-MIT
-Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
+Copyright (c) 2016 Joseph Birr-Pixton
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -32309,7 +32309,7 @@ limitations under the License.
 
 
 LICENSE-MIT
-Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
+Copyright (c) 2023 Dirkjan Ochtman
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -34918,7 +34918,7 @@ DEALINGS IN THE SOFTWARE.
 项目: https://github.com/orlp/slotmap
 
 LICENSE
-Copyright (c) 2021 Orson Peters <orsonpeters@gmail.com>
+Copyright (c) 2021 Orson Peters
 
 This software is provided 'as-is', without any express or implied warranty. In
 no event will the authors be held liable for any damages arising from the use of
@@ -53923,7 +53923,7 @@ limitations under the License.
 
 
 === vendor\eframe\LICENSE-MIT ===
-Copyright (c) 2018-2021 Emil Ernerfeldt <emil.ernerfeldt@gmail.com>
+Copyright (c) 2018-2021 Emil Ernerfeldt
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -53980,7 +53980,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 === egui MIT https://raw.githubusercontent.com/emilk/egui/0.31.1/LICENSE-MIT ===
-Copyright (c) 2018-2021 Emil Ernerfeldt <emil.ernerfeldt@gmail.com>
+Copyright (c) 2018-2021 Emil Ernerfeldt
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated

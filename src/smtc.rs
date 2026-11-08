@@ -50,18 +50,14 @@ impl NowPlaying {
     pub fn kind(&self)->MediaKind {
         if self.title.trim().is_empty(){return MediaKind::Unknown;}
         if self.playback_type==MediaKind::Video {return MediaKind::Video;}
-        // 部分浏览器把所有媒体都上报为音乐，补充识别明确的视频页面标题。
-        let title=self.title.trim().to_lowercase();
-        if [" - 抖音"," - youtube","_哔哩哔哩_bilibili"," - 哔哩哔哩"].iter().any(|suffix|title.ends_with(suffix)) {
-            return MediaKind::Video;
-        }
         let source=self.source.to_lowercase();
         if matches!(source.as_str(),"kugou"|"kugou.exe"|"qqmusic"|"qqmusic.exe"|"cloudmusic.exe"|"汽水音乐"|"sodamusic.exe"|"spotify"|"spotify.exe"|"kwmusic.exe") && self.playback_type==MediaKind::Music{return MediaKind::Music;}
         if ["chrome","msedge","firefox","brave","opera"].iter().any(|name|source.contains(name)) {
-            let album=self.album.trim().to_lowercase();
-            if ["youtube","bilibili","抖音","哔哩哔哩"].contains(&album.as_str()){return MediaKind::Video;}
-            // 视频作者也可能被放进 Artist；浏览器缺少专辑信息时不自动认作歌曲。
+            // 浏览器可能把视频页和歌曲页都上报为音乐，只能靠专辑信息区分：
+            // 专辑与标题相同视为歌曲页，其余非空专辑视为站点名（视频页）。
+            let album=self.album.trim();
             if album.is_empty(){return MediaKind::Unknown;}
+            if !album.eq_ignore_ascii_case(self.title.trim()){return MediaKind::Video;}
         }
         if self.artist.trim().is_empty(){MediaKind::Unknown}else{MediaKind::Music}
     }
@@ -1055,10 +1051,10 @@ mod tests {
     fn media_kind_checks_video_type_before_song_metadata(){
         let mut np=NowPlaying{title:"Video title".into(),artist:"Video author".into(),playback_type:MediaKind::Video,..Default::default()};
         assert_eq!(np.kind(),MediaKind::Video);
-        np.playback_type=MediaKind::Music;np.title="小唐的Token的抖音 - 抖音".into();
-        assert_eq!(np.kind(),MediaKind::Video,"浏览器错误上报音乐类型时仍应识别明确的视频标题");
-        np.title="Movie - YouTube".into();assert_eq!(np.kind(),MediaKind::Video);
-        np.title="阿拉斯加海湾".into();np.artist="蓝心羽".into();assert!(np.is_music());
+        np.playback_type=MediaKind::Music;np.source="Chrome".into();np.title="旅行手记".into();np.album="视频".into();
+        assert_eq!(np.kind(),MediaKind::Video,"浏览器错误上报音乐类型时仍应识别视频页面");
+        np.album.clear();assert_eq!(np.kind(),MediaKind::Unknown,"浏览器缺少专辑信息时不能确认是歌曲");
+        np.source.clear();np.title="阿拉斯加海湾".into();np.artist="蓝心羽".into();assert!(np.is_music());
         np.artist.clear();assert_eq!(np.kind(),MediaKind::Unknown,"只有页面标题不能确认是歌曲");
     }
 
@@ -1066,7 +1062,7 @@ mod tests {
     fn browser_video_authors_are_not_enough_to_identify_a_song(){
         let mut np=NowPlaying{title:"A video".into(),artist:"Video creator".into(),source:"Chrome".into(),playback_type:MediaKind::Music,..Default::default()};
         assert_eq!(np.kind(),MediaKind::Unknown);
-        np.album="YouTube".into();assert_eq!(np.kind(),MediaKind::Video);
+        np.album="视频".into();assert_eq!(np.kind(),MediaKind::Video);
         np.title="阿拉斯加海湾".into();np.artist="蓝心羽".into();np.album="阿拉斯加海湾".into();
         assert_eq!(np.kind(),MediaKind::Music,"网易云网页版的完整歌曲元数据仍应识别为音乐");
         np.source="Spotify.exe".into();np.album.clear();assert_eq!(np.kind(),MediaKind::Music,"音乐客户端不强制要求专辑信息");
