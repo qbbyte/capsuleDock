@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # 本地脚本默认单线程编译以照顾低内存机器，CI 上放开并行。
+  CARGO_BUILD_JOBS: "4"
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: 复用 Cargo 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: 准备 NSIS
+        shell: pwsh
+        run: |
+          try {
+            $compiler = & scripts/get-nsis.ps1 -Directory $env:RUNNER_TEMP | Select-Object -Last 1
+            "NSIS_HOME=$(Split-Path $compiler -Parent)" >> $env:GITHUB_ENV
+          } catch {
+            Write-Warning "NSIS 下载失败，改用 Chocolatey：$($_.Exception.Message)"
+            choco install nsis --no-progress -y
+          }
+
+      - name: 读取版本
+        id: version
+        shell: pwsh
+        run: |
+          $v = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "标签 $env:GITHUB_REF_NAME 与 Cargo.toml 版本 v$v 不一致"
+          }
+
+      - name: 打包安装程序
+        run: pwsh -NoProfile -File scripts/package.ps1
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          name: 胶囊坞 v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/CapsuleDock-Setup-v*.exe
+            dist/CapsuleDock-v*-windows-x64.zip
+            dist/SHA256SUMS.txt

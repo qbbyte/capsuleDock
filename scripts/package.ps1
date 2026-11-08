@@ -5,7 +5,8 @@ Push-Location $projectRoot
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
     if (-not $SkipBuild) {
-        $env:CARGO_BUILD_JOBS = '1'
+        # 默认单线程编译，避免小内存机器被 LTO 拖死；CI 可预设更大的并发数。
+        if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '1' }
         cargo +stable-x86_64-pc-windows-msvc build --locked --release --bin capsuledock --target x86_64-pc-windows-msvc
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
     }

@@ -173,6 +173,8 @@ cargo run --locked --features record --bin capsuledock-record
 
 首次使用需先通过 `./scripts/get-nsis.ps1` 获取 NSIS 编译器；版本号取自 `Cargo.toml`，并与 exe 的 `FileVersion` 校验一致。
 
+推送 `v*` 标签时，GitHub Actions 会自动执行同样的打包流程，并把安装包、ZIP 与 `SHA256SUMS.txt` 上传到 Release；标签必须与 `Cargo.toml` 版本一致（如版本 `1.0.0` 对应标签 `v1.0.0`）。
+
 ## 开发
 
 运行测试：
