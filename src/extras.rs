@@ -602,18 +602,21 @@ impl App {
 }
 
 fn switch(ui:&mut egui::Ui,value:&mut bool)->bool {
-    let (rect,response)=ui.allocate_exact_size(egui::vec2(34.0,20.0),egui::Sense::click());
+    let ctx=ui.ctx().clone();
+    // 热区 40×30、轨道 40×22 居中：比原来 20 高的轨道更容易点中。
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(40.0,30.0),egui::Sense::click());
     if response.clicked(){*value=!*value;}
-    let fill=if *value{Color32::from_rgb(48,184,92)}else{settings_color(&ui.ctx().clone(),Color32::from_rgb(82,82,87),Color32::from_rgb(203,207,214))};
-    ui.painter().rect_filled(rect,10.0,fill);
-    let x=if *value{rect.right()-10.0}else{rect.left()+10.0};
-    ui.painter().circle_filled(egui::pos2(x,rect.center().y+0.5),7.5,Color32::from_black_alpha(35));
-    ui.painter().circle_filled(egui::pos2(x,rect.center().y),7.0,Color32::WHITE);
+    let track=egui::Rect::from_center_size(rect.center(),egui::vec2(40.0,22.0));
+    let fill=if *value{Color32::from_rgb(48,184,92)}else{settings_color(&ctx,Color32::from_rgba_unmultiplied(255,255,255,90),Color32::from_rgba_unmultiplied(0,0,0,40))};
+    ui.painter().rect_filled(track,11.0,fill);
+    let x=if *value{track.right()-11.0}else{track.left()+11.0};
+    ui.painter().circle_filled(egui::pos2(x,track.center().y+0.5),8.5,Color32::from_black_alpha(35));
+    ui.painter().circle_filled(egui::pos2(x,track.center().y),8.0,Color32::WHITE);
     response.clicked()
 }
 /// 设置页版式：标签列宽、开关尺寸、控件与卡片右边缘之间的固定留白。
 pub(crate) const SETTINGS_LABEL_W: f32 = 80.0;
-const SETTINGS_SWITCH_W: f32 = 34.0;
+const SETTINGS_SWITCH_W: f32 = 40.0;
 const SETTINGS_ROW_GAP: f32 = 16.0;
 
 /// 开关行：左侧标题 + 说明（宽度固定、自动换行），右侧开关，长说明也不会把开关挤出卡片。
@@ -639,7 +642,7 @@ pub(crate) fn setting_row(ui:&mut egui::Ui,title:&str,description:&str,value:&mu
 pub(crate) fn settings_segmented<T:PartialEq+Copy>(ui:&mut egui::Ui,value:&mut T,options:&[(T,&str)],item_w:f32)->bool{
     let ctx=&ui.ctx().clone();
     let mut changed=false;
-    egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(28,28,30),Color32::from_rgb(230,233,238)))
+    egui::Frame::new().fill(settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,16),Color32::from_rgba_unmultiplied(0,0,0,12)))
         .corner_radius(8.0).inner_margin(3).show(ui,|ui|{
             ui.horizontal(|ui|{
                 ui.spacing_mut().item_spacing.x=2.0;
@@ -647,7 +650,7 @@ pub(crate) fn settings_segmented<T:PartialEq+Copy>(ui:&mut egui::Ui,value:&mut T
                     let selected=*value==*option;
                     let text=egui::RichText::new(*label).size(12.0).color(if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(200),Color32::from_gray(70))});
                     let button=egui::Button::new(text)
-                        .fill(if selected{settings_color(ctx,Color32::from_rgb(72,72,76),Color32::WHITE)}else{Color32::TRANSPARENT})
+                        .fill(if selected{settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,46),Color32::from_rgba_unmultiplied(0,0,0,26))}else{Color32::TRANSPARENT})
                         .stroke(egui::Stroke::NONE).corner_radius(6.0);
                     let width=item_w.max(ctx.fonts(|f|f.layout_no_wrap(label.to_string(),egui::FontId::proportional(12.0),Color32::WHITE).size().x)+20.0);
                     if ui.add_sized([width,26.0],button).clicked() && !selected {*value=*option;changed=true;}
@@ -683,15 +686,25 @@ pub(crate) fn settings_hint(ui:&mut egui::Ui,text:&str){
 }
 pub(crate) fn settings_card(ui:&mut egui::Ui,add:impl FnOnce(&mut egui::Ui)) {
     let ctx=&ui.ctx().clone();
-    egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(35,35,38),Color32::from_rgb(255,255,255)))
+    // 半透明卡片：像 Big Sur 的分组面板；填充更实、描边退后，卡片边界靠明度差而不是硬线。
+    egui::Frame::new().fill(settings_color(ctx,Color32::from_rgba_unmultiplied(44,45,49,196),Color32::from_rgba_unmultiplied(255,255,255,236)))
+        .stroke(egui::Stroke::new(1.0,settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,12),Color32::from_black_alpha(8))))
         .corner_radius(10.0).inner_margin(egui::Margin::symmetric(16,12))
         .show(ui,|ui|{ui.set_min_width(ui.available_width());ui.spacing_mut().item_spacing.y=8.0;add(ui);});
 }
 pub(crate) fn settings_label(ui:&mut egui::Ui,text:&str){
     let ctx=&ui.ctx().clone();
-    ui.add_space(9.0);
+    ui.add_space(8.0);
     ui.label(egui::RichText::new(text).size(11.5).color(settings_color(ctx,Color32::from_gray(185),Color32::from_gray(70))));
-    ui.add_space(2.0);
+    ui.add_space(6.0);
+}
+/// 设置项之间的发丝线：从文字左缘起画、只留 4% 的痕迹，避免系统灰线压在玻璃上显得脏。
+pub(crate) fn settings_separator(ui:&mut egui::Ui){
+    let ctx=ui.ctx().clone();
+    let spacing=ui.spacing().item_spacing.y;
+    let (rect,_)=ui.allocate_exact_size(egui::vec2(ui.available_width(),spacing),egui::Sense::hover());
+    ui.painter().line_segment([egui::pos2(rect.left(),rect.center().y),egui::pos2(rect.right(),rect.center().y)],
+        egui::Stroke::new(1.0,settings_color(&ctx,Color32::from_white_alpha(12),Color32::from_black_alpha(10))));
 }
 pub(crate) fn settings_control_row(ui:&mut egui::Ui,title:&str,label_width:f32,controls:impl FnOnce(&mut egui::Ui)->egui::Response)->egui::Response{
     ui.horizontal(|ui|{
@@ -706,7 +719,7 @@ fn setting_number<N:egui::emath::Numeric>(ui:&mut egui::Ui,title:&str,value:&mut
     let mut changed=false;
     settings_control_row(ui,title,80.0,|ui|{
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-            ui.allocate_ui_with_layout(egui::vec2(140.0,30.0),egui::Layout::left_to_right(egui::Align::Center),|ui|{
+            ui.allocate_ui_with_layout(egui::vec2(146.0,30.0),egui::Layout::left_to_right(egui::Align::Center),|ui|{
                 changed=number_stepper(ui,value,min,max,suffix,N::from_f64(speed),76.0);
             });
         }).response
@@ -717,17 +730,17 @@ fn number_stepper<N:egui::emath::Numeric>(ui:&mut egui::Ui,value:&mut N,min:N,ma
     let ctx=&ui.ctx().clone();
     let mut changed=false;
     ui.scope(|ui|{
-        ui.spacing_mut().item_spacing.x=6.0;
+        ui.spacing_mut().item_spacing.x=4.0;
         ui.spacing_mut().button_padding=egui::vec2(4.0,2.0);
-        let button=|text|egui::Button::new(egui::RichText::new(text).size(16.0).color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))))
-            .fill(settings_color(ctx,Color32::from_rgb(48,48,51),Color32::from_rgb(229,232,238))).stroke(egui::Stroke::NONE).corner_radius(13.0);
-        let decrease=ui.add_enabled(*value>min,button("−").min_size(egui::vec2(26.0,26.0))).on_hover_text("减少");
+        let button=|text|egui::Button::new(egui::RichText::new(text).size(13.0).color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))))
+            .fill(settings_color(ctx,Color32::from_rgb(48,48,51),Color32::from_rgb(229,232,238))).stroke(egui::Stroke::NONE).corner_radius(8.0);
+        let decrease=ui.add_enabled(*value>min,button("−").min_size(egui::vec2(28.0,28.0))).on_hover_text("减少");
         if decrease.clicked(){
             *value=N::from_f64((value.to_f64()-step.to_f64()).max(min.to_f64()));changed=true;
         }
         let field=ui.add_sized([field_width,28.0],egui::DragValue::new(value).range(min..=max).speed(step.to_f64()).suffix(suffix).fixed_decimals(if N::INTEGRAL{0}else{2}));
         changed|=field.changed();
-        if ui.add_enabled(*value<max,button("+").min_size(egui::vec2(26.0,26.0))).on_hover_text("增加").clicked(){
+        if ui.add_enabled(*value<max,button("+").min_size(egui::vec2(28.0,28.0))).on_hover_text("增加").clicked(){
             *value=N::from_f64((value.to_f64()+step.to_f64()).min(max.to_f64()));changed=true;
         }
     });
@@ -738,19 +751,54 @@ const SETTINGS_GROUPS: [(&str,usize,usize);7] = [
     ("待办与置物",3,4), ("通知",5,5), ("关于",6,6),
 ];
 
+/// 侧栏分组的图标：Lucide 24 网格线性图标，不铺底色。
+/// 单色渲染，颜色跟随该行的文字前景色（浅色主题近黑、暗色主题浅灰，选中行用高对比色），
+/// 类似 macOS 系统设置的单色侧栏；24 网格四周有留白，因此按行高的 80% 绘制，视觉尺寸约 14px。
+fn paint_settings_group_icon(ui:&egui::Ui,center:egui::Pos2,size:f32,group:usize,ink:Color32){
+    let icon=match group {
+        0=>egui::include_image!("../assets/settings-icons/system/settings.svg"),
+        7=>egui::include_image!("../assets/settings-icons/system/layout-grid.svg"),
+        1=>egui::include_image!("../assets/settings-icons/system/music.svg"),
+        2=>egui::include_image!("../assets/settings-icons/system/target.svg"),
+        3|4=>egui::include_image!("../assets/settings-icons/system/list-todo.svg"),
+        5=>egui::include_image!("../assets/settings-icons/system/bell.svg"),
+        _=>egui::include_image!("../assets/settings-icons/system/info.svg"),
+    };
+    let glyph=egui::Rect::from_center_size(center,egui::vec2(size*0.80,size*0.80));
+    let egui::ImageSource::Bytes{uri,bytes}=icon else{return;};
+    // 按物理像素为每个 DPI 单独光栅化，缓存键带尺寸避免不同缩放互相串用。
+    let pixels=(glyph.width()*ui.ctx().pixels_per_point()).ceil() as u32;
+    let image=egui::Image::from_bytes(format!("{uri}/{pixels}.svg"),bytes).fit_to_exact_size(glyph.size());
+    if let Ok(egui::load::TexturePoll::Ready{texture})=image.load_for_size(ui.ctx(),glyph.size()) {
+        // 图标本身是白色描边，用 tint 相乘即可得到任意前景色。
+        ui.painter().image(texture.id,glyph,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),ink);
+    }
+}
+
 impl App {
     pub fn settings_ui(&mut self,ctx:&egui::Context,autostart:bool){
         self.updates.poll(ctx);
         self.updates.dialog_ui(ctx);
-        if !self.settings_open{return;}
+        if !self.settings_open{
+            // 关闭后模糊底板窗口不会跟着消失，必须主动收起，否则桌面上会留下一块模糊方块。
+            // 只隐藏、不销毁：Compositor/D3D 初始化很贵，复用后下次打开能立刻出玻璃。
+            #[cfg(windows)]
+            if let Some(backdrop)=&mut self.settings_backdrop{backdrop.hide();}
+            return;
+        }
         let id=egui::ViewportId::from_hash_of("capsuledock-settings");
         let focus_requested=std::mem::take(&mut self.settings_focus_requested);
-        ctx.show_viewport_immediate(id,egui::ViewportBuilder::default().with_title("胶囊坞设置").with_icon(theme::app_icon()).with_inner_size([690.0,560.0]).with_min_inner_size([600.0,450.0]).with_visible(false).with_active(false).with_window_level(egui::WindowLevel::Normal),|ctx,_|{
+        ctx.show_viewport_immediate(id,egui::ViewportBuilder::default().with_title("胶囊坞设置").with_icon(theme::app_icon()).with_inner_size([690.0,560.0]).with_min_inner_size([600.0,450.0]).with_visible(false).with_active(false).with_window_level(egui::WindowLevel::Normal).with_decorations(false).with_transparent(true),|ctx,_|{
             let dark=self.settings.settings_theme.dark(crate::settings_theme::system_dark(ctx));
             let original_style=ctx.style();
-            let mut style=(*original_style).clone();
-            style.visuals=if dark{egui::Visuals::dark()}else{egui::Visuals::light()};
-            ctx.set_style(style);
+            // 克隆整个 Style 是每帧的大头，只在主题真正变化时才做，渲染完再恢复坞体样式。
+            let theme_changed=original_style.visuals.dark_mode!=dark;
+            if theme_changed {
+                let mut style=(*original_style).clone();
+                style.visuals=if dark{egui::Visuals::dark()}else{egui::Visuals::light()};
+                ctx.set_style(style);
+            }
+            // 视图主题命令每帧照发：视图可能被重建或在最小化/失焦后被恢复，只在样式变化时发会漏掉这些场景。
             ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if dark{egui::SystemTheme::Dark}else{egui::SystemTheme::Light}));
             if self.settings.settings_theme==crate::settings_theme::SettingsTheme::System {
                 ctx.request_repaint_after(std::time::Duration::from_secs(1));
@@ -762,48 +810,53 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             if ctx.input(|i|i.viewport().close_requested()){self.settings_open=false;}
+            // 无边框窗口：裁圆角、铺玻璃底板，并自绘一条融入玻璃的标题栏。
+            self.settings_window_chrome(ctx);
             let before=format!("{:?}",self.settings);
-            egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(29,29,32),Color32::from_rgb(237,239,243))).stroke(egui::Stroke::new(1.0,settings_color(ctx,Color32::from_rgb(42,42,45),Color32::from_rgb(216,219,225)))).inner_margin(egui::Margin::symmetric(10,12))).show(ctx,|ui|{
+            // Big Sur 的侧边栏是一块更明显的 vibrancy 面板，用一层淡雾和内容区分开。
+            egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,18),Color32::from_rgba_unmultiplied(24,31,40,22))).inner_margin(egui::Margin{left:10,right:10,top:46,bottom:12})).show(ctx,|ui|{
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new("设置").size(11.0).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(105))));
                 ui.add_space(7.0);
-                for (name,start,end) in SETTINGS_GROUPS {
-                    if start==6 {ui.add_space((ui.available_height()-38.0).max(0.0));}
+                let mut draw_row=|ui:&mut egui::Ui,rect:egui::Rect,response:&egui::Response,name:&str,start:usize,end:usize|{
                     let selected=(start..=end).contains(&self.settings_tab);
-                    let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),36.0),egui::Sense::click());
                     if response.clicked() && !selected{self.settings_tab=start;}
                     if selected || response.hovered(){
-                        ui.painter().rect_filled(rect,7.0,if selected{settings_color(ctx,Color32::from_rgb(43,43,46),Color32::from_rgb(214,221,232))}else{settings_color(ctx,Color32::from_rgb(30,30,33),Color32::from_rgb(225,230,238))});
+                        ui.painter().rect_filled(rect,8.0,if selected{settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,30),Color32::from_rgba_unmultiplied(0,0,0,16))}else{settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,14),Color32::from_rgba_unmultiplied(0,0,0,8))});
                     }
-                    let icon=match start {
-                        0=>egui::include_image!("../assets/settings-icons/system/general.svg"),
-                        7=>egui::include_image!("../assets/settings-icons/system/pages.svg"),
-                        1=>egui::include_image!("../assets/settings-icons/system/music.svg"),
-                        2=>egui::include_image!("../assets/settings-icons/system/focus.svg"),
-                        3=>egui::include_image!("../assets/settings-icons/system/tasks.svg"),
-                        5=>egui::include_image!("../assets/settings-icons/system/notifications.svg"),
-                        _=>egui::include_image!("../assets/settings-icons/system/about.svg"),
-                    };
-                    let icon_bg=egui::Rect::from_center_size(egui::pos2(rect.left()+21.0,rect.center().y),egui::vec2(25.0,25.0));
-                    egui::Image::new(icon).paint_at(ui,icon_bg);
-                    ui.painter().text(egui::pos2(rect.left()+40.0,rect.center().y),egui::Align2::LEFT_CENTER,name,egui::FontId::proportional(13.0),if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(225),Color32::from_gray(55))});
+                    let ink=if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(225),Color32::from_gray(55))};
+                    paint_settings_group_icon(ui,egui::pos2(rect.left()+18.5,rect.center().y),21.0,start,ink);
+                    ui.painter().text(egui::pos2(rect.left()+36.0,rect.center().y),egui::Align2::LEFT_CENTER,name,egui::FontId::proportional(12.5),ink);
+                };
+                for (name,start,end) in SETTINGS_GROUPS {
+                    if start==6 {continue;} // “关于”固定贴底，不参与常规排列
+                    let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),34.0),egui::Sense::click());
+                    draw_row(ui,rect,&response,name,start,end);
                     ui.add_space(3.0);
                 }
+                if let Some((name,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,_)|*start==6).copied(){
+                    // 用内容区底部定位，避免窗口高度变化时这一行跑出可视区域。
+                    let bottom=ui.max_rect().bottom();
+                    let rect=egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(),(bottom-37.0).max(ui.cursor().top())),egui::vec2(ui.available_width(),34.0));
+                    let response=ui.interact(rect,ui.id().with("settings-about-row"),egui::Sense::click());
+                    draw_row(ui,rect,&response,name,start,end);
+                }
             });
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(25,25,27),Color32::from_rgb(246,247,249))).inner_margin(egui::Margin::symmetric(22,16))).show(ctx,|ui|{
+            // 内容区完全透到玻璃上，只靠卡片承载信息层级。
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::TRANSPARENT).inner_margin(egui::Margin{left:22,right:22,top:46,bottom:16})).show(ctx,|ui|{
                 ui.spacing_mut().item_spacing=egui::vec2(8.0,5.0);
                 ui.spacing_mut().button_padding=egui::vec2(10.0,6.0);
                 ui.style_mut().text_styles.insert(egui::TextStyle::Small,egui::FontId::proportional(12.0));
                 ui.visuals_mut().override_text_color=Some(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41)));
-                ui.visuals_mut().extreme_bg_color=settings_color(ctx,Color32::from_rgb(25,25,28),Color32::from_rgb(244,246,249));
-                ui.visuals_mut().widgets.inactive.bg_fill=settings_color(ctx,Color32::from_rgb(50,50,54),Color32::from_rgb(228,231,236));
-                ui.visuals_mut().widgets.hovered.bg_fill=settings_color(ctx,Color32::from_rgb(65,65,71),Color32::from_rgb(216,222,231));
+                ui.visuals_mut().extreme_bg_color=settings_color(ctx,Color32::from_rgba_unmultiplied(18,20,24,150),Color32::from_rgba_unmultiplied(255,255,255,210));
+                ui.visuals_mut().widgets.inactive.bg_fill=settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,26),Color32::from_rgba_unmultiplied(0,0,0,14));
+                ui.visuals_mut().widgets.hovered.bg_fill=settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,42),Color32::from_rgba_unmultiplied(0,0,0,22));
                 // 统一按钮：高度 28、圆角 7、内边距 12×5，无描边；默认按钮也套用这套样式。
                 ui.spacing_mut().button_padding=egui::vec2(12.0,5.0);
                 ui.spacing_mut().interact_size.y=28.0;
                 {
-                    let fill=settings_color(ctx,Color32::from_rgb(50,50,54),Color32::from_rgb(228,231,236));
-                    let hover=settings_color(ctx,Color32::from_rgb(65,65,71),Color32::from_rgb(216,222,231));
+                    let fill=settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,26),Color32::from_rgba_unmultiplied(0,0,0,14));
+                    let hover=settings_color(ctx,Color32::from_rgba_unmultiplied(255,255,255,42),Color32::from_rgba_unmultiplied(0,0,0,22));
                     let widgets=&mut ui.visuals_mut().widgets;
                     for (w,f) in [(&mut widgets.inactive,fill),(&mut widgets.hovered,hover),(&mut widgets.active,hover)] {
                         w.corner_radius=egui::CornerRadius::same(7);
@@ -817,21 +870,12 @@ impl App {
                 if let Some((_,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,end)|(*start..=*end).contains(&self.settings_tab)) {
                     if start!=end {
                         ui.add_space(7.0);
-                        egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(33,33,36),Color32::from_rgb(232,235,240))).corner_radius(8.0).inner_margin(3).show(ui,|ui|{
-                            ui.spacing_mut().item_spacing.x=2.0;
-                            ui.horizontal(|ui|{
-                                for index in *start..=*end {
-                                    let selected=self.settings_tab==index;
-                                    let button=egui::Button::new(egui::RichText::new(titles[index]).size(12.0).color(if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(210),Color32::from_gray(55))}))
-                                        .fill(if selected{settings_color(ctx,Color32::from_rgb(70,70,74),Color32::from_rgb(205,215,229))}else{Color32::TRANSPARENT})
-                                        .stroke(egui::Stroke::NONE).corner_radius(6.0);
-                                    if ui.add_sized([68.0,26.0],button).clicked(){self.settings_tab=index;}
-                                }
-                            });
-                        });
+                        // 复用统一分段器：宽度随文字自适应，固定 68px 会裁掉较长的中文标签。
+                        let options:Vec<(usize,&str)>=(*start..=*end).map(|index|(index,titles[index])).collect();
+                        settings_segmented(ui,&mut self.settings_tab,&options,68.0);
                     }
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical().id_salt(("settings-scroll",self.settings_tab)).auto_shrink([false,false]).show(ui,|ui|{
                     // 右侧给滚动条留出空隙，卡片和开关不会被它压住。
                     ui.set_width((ui.available_width()-12.0).max(240.0));
@@ -843,9 +887,9 @@ impl App {
                         settings_label(ui,"状态组件");
                         settings_card(ui,|ui|{
                             setting_row(ui,"电量","本机电量、充电状态与提醒；无电池设备自动隐藏",&mut self.settings.show_battery);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"电脑状态","坞内常驻显示 CPU 与内存占用圆环",&mut self.settings.show_sysmon);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"坞上歌词","收起时显示正在唱的那一句",&mut self.settings.island_lyrics);
                         });
                         settings_label(ui,"功能页面");
@@ -857,7 +901,7 @@ impl App {
                             let mut movement=None;
                             let row_w=ui.available_width();
                             for (index,page) in self.settings.page_order.into_iter().enumerate() {
-                                if index>0 {ui.separator();}
+                                if index>0 {settings_separator(ui);}
                                 let mut visible=self.settings.visible_pages[page];
                                 let can_change=!visible || self.settings.visible_pages.iter().filter(|enabled|**enabled).count()>1;
                                 let row=ui.push_id(("page-order",page),|ui|ui.horizontal(|ui|{
@@ -911,17 +955,17 @@ impl App {
                             let skins:Vec<(Skin,&str)>=Skin::ALL.iter().map(|s|(*s,s.label())).collect();
                             settings_control_row_right(ui,"皮肤",|ui|{settings_segmented(ui,&mut self.settings.skin,&skins,64.0);});
                             settings_hint(ui,self.settings.skin.description());
-                            ui.separator();
+                            settings_separator(ui);
                             let shapes:Vec<(model::IslandShape,&str)>=model::IslandShape::ALL.iter().map(|s|(*s,s.label())).collect();
                             settings_control_row_right(ui,"形状",|ui|{settings_segmented(ui,&mut self.settings.island_shape,&shapes,64.0);});
                             settings_hint(ui,self.settings.island_shape.description());
                             if self.settings.skin.is_glass() {
-                                ui.separator();
+                                settings_separator(ui);
                                 let mut blur=self.settings.glass_blur;
                                 setting_row(ui,"背景模糊","使用 Windows 合成引擎的实时模糊，严格贴合坞体形状（需开启系统“透明效果”）；关闭后改为烟熏半透明",&mut blur);
                                 self.settings.glass_blur=blur;
                             }
-                            ui.separator();
+                            settings_separator(ui);
                             settings_control_row(ui,"大小",56.0,|ui|{
                                 ui.horizontal(|ui|{
                                     ui.spacing_mut().slider_width=180.0;
@@ -971,15 +1015,15 @@ impl App {
                             let (less,more)=if side{("偏上","偏下")}else{("偏左","偏右")};
                             let position=match offset {0=>"居中".to_string(),o if o<0=>format!("{less} {}%",-o),o=>format!("{more} {o}%")};
                             ui.label(egui::RichText::new(format!("当前：{position}。展开面板和通知始终留在屏幕内；换屏或调整大小后保持相对位置。")).size(11.0).color(ui.visuals().weak_text_color()));
-                            ui.separator();
+                            settings_separator(ui);
                             settings_control_row_right(ui,"时间制式",|ui|{settings_segmented(ui,&mut self.settings.clock_12h,&[(false,"24 小时"),(true,"12 小时")],72.0);});
                             settings_control_row_right(ui,"时段文字",|ui|{settings_segmented(ui,&mut self.settings.clock_period,&[(0,"不显示"),(1,"上午 / 下午"),(2,"详细时段")],72.0);});
                             settings_hint(ui,"详细时段：凌晨、上午、中午、下午、傍晚、晚上");
-                            ui.separator();
+                            settings_separator(ui);
                             let mut minimal=self.settings.minimal;
                             setting_row(ui,"极简刘海","收起时显示一条细线",&mut minimal);
                             if minimal!=self.settings.minimal {self.set_minimal(minimal);}
-                            ui.separator();
+                            settings_separator(ui);
 
                             let mut pet=self.settings.pet;
                             setting_row(ui,"胶囊坞吉祥物","收起时常驻，播放音乐时一起唱歌",&mut pet);
@@ -989,7 +1033,7 @@ impl App {
                         settings_label(ui,"声音与显示");
                         settings_card(ui,|ui|{
                             setting_row(ui,"提醒声音","待办和专注提醒",&mut self.settings.sound);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"全屏时隐藏","游戏、视频和演示全屏时隐藏",&mut self.settings.hide_fullscreen);
                         });
                     }
@@ -998,7 +1042,7 @@ impl App {
                         settings_card(ui,|ui|{
                             setting_row(ui,"展开时显示歌词","在播放器右侧同步滚动显示歌词",&mut self.settings.lyrics_enabled);
                             self.show_lyrics=self.settings.lyrics_enabled;
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"坞上歌词","收起时显示当前句；无同步歌词时恢复普通坞",&mut self.settings.island_lyrics);
                         });
                         settings_label(ui,"歌词显示时间");
@@ -1013,7 +1057,7 @@ impl App {
                         settings_label(ui,"计时时长");
                         settings_card(ui,|ui|{
                             setting_number(ui,"专注",&mut self.settings.focus_minutes,1,180," 分钟",1.0);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_number(ui,"休息",&mut self.settings.rest_minutes,1,60," 分钟",1.0);
                             ui.add_space(3.0);
                             ui.small("调整后从下一阶段开始生效。");
@@ -1047,9 +1091,9 @@ impl App {
                         settings_label(ui,"系统提示");
                         settings_card(ui,|ui|{
                             setting_row(ui,"系统状态","音量、充电、网络和键盘状态",&mut self.settings.system_hud);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"蓝牙通知","设备连接与断开提醒；关闭后停止蓝牙监听",&mut self.settings.bluetooth_notifications);
-                            ui.separator();
+                            settings_separator(ui);
                             setting_row(ui,"胶囊坞提醒","在坞上显示专注和待办提醒",&mut self.settings.notifications);
                         });
                     }
@@ -1074,7 +1118,125 @@ impl App {
             });
             self.avoidance.dialog(ctx,&mut self.settings);
             if before!=format!("{:?}",self.settings){self.settings.save();}
-            ctx.set_style(original_style);
+            if theme_changed {ctx.set_style(original_style);}
         });
+    }
+
+    /// 设置窗口的无边框外观：圆角裁剪 + 玻璃底板 + 融入玻璃的极简标题栏。
+    ///
+    /// 标题栏不占独立区域，直接压在内容之上，只有一行标题和右侧的最小化/关闭按钮，
+    /// 靠拖拽整条空白带移动窗口。
+    fn settings_window_chrome(&mut self,ctx:&egui::Context){
+        let dark=ctx.style().visuals.dark_mode;
+        let window=ctx.input(|i|i.viewport().inner_rect).map_or_else(
+            || egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(690.0,560.0)),
+            |r|egui::Rect::from_min_size(egui::Pos2::ZERO,r.size()),
+        );
+        #[cfg(windows)]
+        {
+            let scale=ctx.pixels_per_point();
+            // 句柄缓存：按标题枚举窗口每帧都要扫一遍线程窗口，窗口多时是固定的几百微秒；
+            // 命中缓存只做一次 IsWindow + 标题比对，失效再重新找。
+            let hwnd_key=egui::Id::new("capsuledock-settings-hwnd");
+            let cached=ctx.data(|d|d.get_temp::<isize>(hwnd_key));
+            let hwnd=match cached {
+                Some(raw) if crate::native::window_is_titled(raw,"胶囊坞设置")=>Some(crate::native::window_from_raw(raw)),
+                _=>{
+                    if cached.is_some(){ctx.data_mut(|d|d.remove_temp::<isize>(hwnd_key));}
+                    crate::frameless::find_thread_window("胶囊坞设置")
+                }
+            };
+            if let Some(hwnd)=hwnd {ctx.data_mut(|d|d.insert_temp(hwnd_key,hwnd.0 as isize));}
+            // 圆角直径 24 逻辑点，与坞体、更新弹窗的视觉语言一致。
+            let clipped=match hwnd {Some(hwnd)=>crate::frameless::clip_window(hwnd,window,scale,24.0),None=>false};
+            // 模糊不可用时退回不透明背景，避免整窗透明看不见内容。
+            let glass=!self.settings_blur_unavailable && clipped;
+            if glass && self.settings_backdrop.is_none() {
+                match crate::composition::Backdrop::new() {
+                    Ok(backdrop)=>{
+                        crate::frameless::glass_diagnostic("设置窗口模糊底板已创建");
+                        self.settings_backdrop=Some(backdrop);
+                    }
+                    Err(error)=>{
+                        crate::frameless::glass_diagnostic(&format!("设置窗口模糊底板创建失败：{error:?}"));
+                        self.settings_blur_unavailable=true;
+                    }
+                }
+            }
+            if let Some(hwnd)=hwnd {
+                // 关键：DwmEnableBlurBehindWindow / DwmSetWindowAttribute 每帧调用会强制 DWM
+                // 反复重建窗口合成，整个桌面都会跟着掉帧。只在窗口创建或从最小化恢复时应用一次。
+                let raw=hwnd.0 as isize;
+                let key=egui::Id::new("capsuledock-settings-native");
+                let (last,was_minimized)=ctx.data(|d|d.get_temp::<(isize,bool)>(key)).unwrap_or((isize::MIN,false));
+                let minimized=ctx.input(|i|i.viewport().minimized.unwrap_or(false));
+                if raw!=last || (was_minimized && !minimized) {
+                    let _=crate::native::enable_alpha_composition(hwnd);
+                    // 去掉 Win11 的 1px 系统边框，否则玻璃顶部会有一条白线。
+                    crate::native::disable_window_frame_border(hwnd);
+                }
+                ctx.data_mut(|d|d.insert_temp(key,(raw,minimized)));
+            }
+            if let Some(backdrop)=&mut self.settings_backdrop {
+                let pieces=[crate::app::BlurPiece{x:0.0,y:0.0,w:window.width()*scale,h:window.height()*scale,radius:12.0*scale}];
+                // 视图重建的头一帧可能还拿不到 HWND，跳过即可，不能因此永久禁用玻璃。
+                if let Some(hwnd)=hwnd {
+                    if let Err(error)=backdrop.show(hwnd,&pieces) {
+                        crate::frameless::glass_diagnostic(&format!("设置窗口模糊层更新失败：{error:?}"));
+                        self.settings_backdrop=None;
+                        self.settings_blur_unavailable=true;
+                    }
+                }
+            }
+        }
+        // 玻璃着色必须画进与侧边栏/内容区同一个背景层，且在本函数里先于面板提交，
+        // 面板才会盖在着色之上；另起图层会整片盖住内容。
+        let painter=ctx.layer_painter(egui::LayerId::background());
+        #[cfg(windows)]
+        let blurred=!self.settings_blur_unavailable;
+        #[cfg(not(windows))]
+        let blurred=false;
+        // 底色：Big Sur 的窗口底是偏灰的白，透明度适中；亮壁纸下也不会整窗发白。
+        let tint_alpha=if blurred{if dark{0.62}else{0.60}}else{1.0};
+        let tint=settings_color(ctx,Color32::from_rgb(20,22,26),Color32::from_rgb(246,247,249));
+        painter.rect_filled(window,12.0,crate::paint::alpha(tint,tint_alpha));
+        // 不做顶部柔光：Big Sur 是均匀的 vibrancy，顶部额外提亮会形成一条突兀的白带。
+        // 边缘：用一条很细的亮边收口，顶部镜面保持克制。
+        let rim=settings_color(ctx,Color32::from_white_alpha((crate::glass::rim_alpha()*255.0*0.72).round() as u8),Color32::from_black_alpha(22));
+        painter.rect_stroke(window,12.0,egui::Stroke::new(1.0,rim),egui::StrokeKind::Inside);
+        painter.rect_stroke(window.shrink(1.0),11.0,egui::Stroke::new(1.0,settings_color(ctx,Color32::from_white_alpha(9),Color32::from_white_alpha(26))),egui::StrokeKind::Inside);
+        let glint=settings_color(ctx,Color32::from_white_alpha(46),Color32::from_white_alpha(64));
+        painter.line_segment([egui::pos2(window.left()+16.0,window.top()+0.7),egui::pos2(window.right()-16.0,window.top()+0.7)],egui::Stroke::new(1.0,glint));
+        // 侧边栏与内容区之间的发丝线。
+        painter.vline(180.0,egui::Rangef::new(window.top()+12.0,window.bottom()-12.0),egui::Stroke::new(1.0,settings_color(ctx,Color32::from_white_alpha(14),Color32::from_black_alpha(12))));
+        // 标题栏：拖拽带 + 标题 + 窗口按钮。
+        let title_h=38.0;
+        let drag=egui::Rect::from_min_size(window.min,egui::vec2(window.width(),title_h));
+        let close=egui::Rect::from_min_size(egui::pos2(window.right()-40.0,window.top()+7.0),egui::vec2(26.0,26.0));
+        let minimize=egui::Rect::from_min_size(egui::pos2(close.left()-30.0,window.top()+7.0),egui::vec2(26.0,26.0));
+        let layer=egui::LayerId::new(egui::Order::Middle,egui::Id::new("settings-chrome-ui"));
+        let ui=egui::Ui::new(ctx.clone(),egui::Id::new("settings-chrome-ui"),egui::UiBuilder::new().layer_id(layer).max_rect(drag));
+        let drag_zone=egui::Rect::from_min_max(drag.min,egui::pos2(minimize.left()-6.0,drag.max.y));
+        if ui.interact(drag_zone,egui::Id::new("settings-drag"),egui::Sense::drag()).drag_started(){
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        let ink=settings_color(ctx,Color32::from_gray(225),Color32::from_gray(40));
+        ui.painter().text(egui::pos2(window.left()+18.0,drag.center().y),egui::Align2::LEFT_CENTER,"胶囊坞设置",egui::FontId::proportional(12.5),ink);
+        for (rect,kind) in [(minimize,0u8),(close,1u8)] {
+            let response=ui.interact(rect,egui::Id::new(("settings-winbtn",kind)),egui::Sense::click());
+            if response.hovered(){ui.painter().rect_filled(rect,7.0,settings_color(ctx,Color32::from_white_alpha(40),Color32::from_black_alpha(22)));}
+            let center=rect.center();
+            if kind==0 {
+                ui.painter().line_segment([center+egui::vec2(-5.0,0.0),center+egui::vec2(5.0,0.0)],egui::Stroke::new(1.3,ink));
+            } else {
+                for direction in [-1.0,1.0] {
+                    ui.painter().line_segment([center+egui::vec2(-4.0,-4.0*direction),center+egui::vec2(4.0,4.0*direction)],egui::Stroke::new(1.3,ink));
+                }
+            }
+            if response.clicked() {
+                if kind==0 {ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));}
+                else {self.settings_open=false;}
+            }
+        }
     }
 }

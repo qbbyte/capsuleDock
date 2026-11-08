@@ -456,6 +456,11 @@ pub struct App {
     fluid_title:String,
     screen:Option<Rect>,
     pub(crate) settings_focus_requested:bool,
+    /// 设置窗口的合成引擎模糊底板；无边框透明窗口靠它显示真实背景。
+    #[cfg(windows)]
+    pub(crate) settings_backdrop:Option<crate::composition::Backdrop>,
+    #[cfg(windows)]
+    pub(crate) settings_blur_unavailable:bool,
     pub(crate) settings_tab:usize,
     pub(crate) settings_category:usize,
     pub(crate) subpage:Option<usize>,
@@ -516,7 +521,7 @@ impl App {
         let focus_seconds=settings.focus_minutes as f32*60.0;
         let initial_lyrics=settings.lyrics_enabled;
         let initial_page=settings.page_order.iter().copied().find(|page|settings.visible_pages[*page]).unwrap_or(0);
-        Self {
+        let mut app = Self {
             opts,
             settings,
             todos: model::TodoList::load(),
@@ -541,6 +546,10 @@ impl App {
             media: NowPlaying::default(),
             music_artwork: None,
             forced_open_until:0.0, settings_open:false, displays:Vec::new(), browser_at_top:false, browser_minimal_active:false, glass_tint:0.0, fluid:Default::default(), fluid_origin:Pos2::ZERO, fluid_art:None, fluid_title:String::new(), screen:None, settings_focus_requested:false, settings_tab:0, settings_category:0, subpage:None,
+            #[cfg(windows)]
+            settings_backdrop:None,
+            #[cfg(windows)]
+            settings_blur_unavailable:false,
             notices: crate::notice::NoticeStack::new(), hud_alpha: 0.0, notice_width:Spring::new(0.0,CLOSE.0,CLOSE.1), notice_details:false, pending: vec![],
             todo_first: 0, pet: Default::default(),
             toast: None, toast_below: false,
@@ -560,7 +569,9 @@ impl App {
             bt_initialized: false,
             updates: Default::default(),
             resident: Default::default(), resident_power:(None,false), sysmon: Default::default(), cpu_shown: 0.0, mem_shown: 0.0,
-        }
+        };
+        if std::env::var("CAPSULEDOCK_DEBUG_OPEN_SETTINGS").is_ok() { app.open_settings(); }
+        app
     }
 
     pub fn say(&mut self, msg: impl Into<String>) {

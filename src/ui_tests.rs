@@ -2603,8 +2603,11 @@ fn settings_theme_follows_system_and_preserves_island_style() {
                         for choice in choices {assert!((center(label)-center(choice)).abs()<1.0,"{label}与{choice}应垂直居中：{} / {}",center(label),center(choice));}
                     }
                 }
-                let background=if dark{egui::Color32::from_rgb(25,25,27)}else{egui::Color32::from_rgb(246,247,249)};
-                assert!(child.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(r) if r.fill==background && r.rect.width()>400.0)));
+                // 设置窗口现在是一层没有模糊兜底的半透明玻璃，用底色亮度区分深/浅主题。
+                let glass=child.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Rect(r) if r.rect.width()>400.0 && r.fill.a()<255 =>Some(r.fill),_=>None})
+                    .expect("设置窗口应铺一层半透明玻璃底板");
+                let brightness=glass.r() as u32+glass.g() as u32+glass.b() as u32;
+                assert!(if dark{brightness<220}else{brightness>400},"玻璃底色应随主题变化：{glass:?}");
                 raster.update_textures(&root.textures_delta);raster.update_textures(&child.textures_delta);
                 if frame==2 {
                     if let Some(dest)=std::env::var_os("CAPSULEDOCK_THEME_PREVIEW_DIR") {

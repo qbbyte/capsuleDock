@@ -227,33 +227,7 @@ impl State {
 // Windows 的 GL 透明窗口可能仍显示黑底，按绘制轮廓裁掉窗口外沿。
 #[cfg(windows)]
 fn clip_update_window(rect: egui::Rect, scale: f32) {
-    use windows::Win32::{Foundation::{BOOL, HWND, LPARAM}, Graphics::Gdi::*,
-        System::Threading::GetCurrentThreadId, UI::WindowsAndMessaging::*};
-    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
-        let mut title = [0u16; 64];
-        let len = GetWindowTextW(hwnd, &mut title) as usize;
-        if String::from_utf16_lossy(&title[..len]) != "胶囊坞更新" { return BOOL(1); }
-        let &(rect, scale) = &*(data.0 as *const (egui::Rect, f32));
-        let region = update_window_region(rect, scale);
-        let old = CreateRectRgn(0, 0, 0, 0);
-        GetWindowRgn(hwnd, old);
-        if EqualRgn(old, region).as_bool() || SetWindowRgn(hwnd, region, true) == 0 {
-            let _ = DeleteObject(region);
-        }
-        let _ = DeleteObject(old);
-        BOOL(0)
-    }
-    let data = (rect, scale);
-    unsafe { let _ = EnumThreadWindows(GetCurrentThreadId(), Some(visit), LPARAM(&data as *const _ as isize)); }
-}
-
-#[cfg(windows)]
-unsafe fn update_window_region(rect: egui::Rect, scale: f32) -> windows::Win32::Graphics::Gdi::HRGN {
-    windows::Win32::Graphics::Gdi::CreateRoundRectRgn(
-        (rect.left()*scale).round() as i32, (rect.top()*scale).round() as i32,
-        (rect.right()*scale).round() as i32 + 1, (rect.bottom()*scale).round() as i32 + 1,
-        (44.0*scale).round() as i32, (44.0*scale).round() as i32,
-    )
+    crate::frameless::clip_thread_window("胶囊坞更新", rect, scale, 44.0);
 }
 
 fn update_agent(proxy: Option<&str>, timeout: Duration) -> Result<ureq::Agent, String> {
@@ -648,7 +622,7 @@ fn update_window_region_excludes_black_corners() {
     for scale in [1.0, 1.25, 1.5, 2.0] {
         let rect = egui::Rect::from_min_max(egui::pos2(8.0,8.0), egui::pos2(512.0,408.0));
         unsafe {
-            let region = update_window_region(rect, scale);
+            let region = crate::frameless::rounded_region(rect, scale, 44.0);
             for (x,y) in [(9.0,9.0),(511.0,9.0),(9.0,407.0),(511.0,407.0),(1.0,208.0)] {
                 assert!(!PtInRegion(region,(x*scale) as i32,(y*scale) as i32).as_bool());
             }

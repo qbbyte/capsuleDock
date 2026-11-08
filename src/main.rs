@@ -394,8 +394,11 @@ impl eframe::App for Shell {
         #[cfg(windows)] let autostart = self.autostart;
         #[cfg(not(windows))] let autostart = false;
         self.app.settings_ui(ctx, autostart);
-        #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
-        #[cfg(not(windows))] let repaint_after=out.repaint_after;
+        #[cfg(windows)] let mut repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
+        #[cfg(not(windows))] let mut repaint_after=out.repaint_after;
+        // 设置窗口是 immediate viewport，坞体每帧重绘时它也会整窗重绘；叠上 Acrylic 模糊后
+        // 核显容易吃力。打开设置时把刷新压到 30fps，静态界面感知不出差别。
+        if self.app.settings_open {repaint_after=repaint_after.max(Duration::from_millis(33));}
         schedule_repaint(ctx,repaint_after);
     }
 }

@@ -98,7 +98,7 @@ fn watch_drag(hwnd:HWND,ctx:eframe::egui::Context){
 }
 
 // 图形上下文和原生样式就绪后重新启用逐像素合成；不能只依赖创建 HWND 时的请求。
-fn enable_alpha_composition(hwnd:HWND)->windows::core::Result<()> {
+pub(crate) fn enable_alpha_composition(hwnd:HWND)->windows::core::Result<()> {
     use windows::Win32::Graphics::Dwm::{DwmEnableBlurBehindWindow,DWM_BLURBEHIND,DWM_BB_ENABLE,DWM_BB_BLURREGION};
     unsafe {
         let region=CreateRectRgn(0,0,-1,-1);
@@ -107,6 +107,36 @@ fn enable_alpha_composition(hwnd:HWND)->windows::core::Result<()> {
         let result=DwmEnableBlurBehindWindow(hwnd,&blur);
         let _=DeleteObject(region);
         result
+    }
+}
+
+// Win11 会给保留系统框样式的窗口（winit 的无边框窗仍带 WS_CAPTION/WS_THICKFRAME）画一圈
+// 1px 系统边框，并强制 8px 圆角；盖在玻璃上就是沿轮廓的一条白线，还压掉窗口区域设计的圆角。
+// 这里显式关掉边框、禁用系统圆角，外形交给 SetWindowRgn 的区域决定；Win10 不支持则忽略失败。
+pub(crate) fn disable_window_frame_border(hwnd:HWND) {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute,DWMWA_BORDER_COLOR,DWMWA_COLOR_NONE,DWMWA_WINDOW_CORNER_PREFERENCE,DWMWCP_DONOTROUND};
+    unsafe {
+        let _=DwmSetWindowAttribute(hwnd,DWMWA_BORDER_COLOR,&DWMWA_COLOR_NONE as *const u32 as *const _,4);
+        let corner=DWMWCP_DONOTROUND.0;
+        let _=DwmSetWindowAttribute(hwnd,DWMWA_WINDOW_CORNER_PREFERENCE,&corner as *const i32 as *const _,4);
+    }
+}
+
+/// 由缓存的原始句柄值还原 HWND（设置窗口按帧复用句柄用）。
+pub(crate) fn window_from_raw(raw:isize)->HWND {
+    HWND(raw as *mut std::ffi::c_void)
+}
+
+/// 缓存的句柄是否仍指向指定标题的存活窗口。
+/// 句柄会被系统回收，只判 `IsWindow` 可能命中复用同一句柄值的别的窗口，所以同时比对标题。
+pub(crate) fn window_is_titled(raw:isize,title:&str)->bool {
+    unsafe {
+        let hwnd=window_from_raw(raw);
+        if !IsWindow(hwnd).as_bool(){return false;}
+        let mut buffer=[0u16;64];
+        let len=GetWindowTextW(hwnd,&mut buffer);
+        if len<=0 {return false;}
+        title.encode_utf16().eq(buffer[..len as usize].iter().copied())
     }
 }
 
