@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "capsuledock"
-version = "0.6.61"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",

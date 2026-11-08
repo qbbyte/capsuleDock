@@ -1,8 +1,8 @@
 #pragma code_page(65001)
 1 ICON "assets/capsuledock.ico"
 1 VERSIONINFO
- FILEVERSION 0,6,61,0
- PRODUCTVERSION 0,6,61,0
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -17,8 +17,8 @@ BEGIN
             VALUE "InternalName", "CapsuleDock"
             VALUE "OriginalFilename", "capsuledock.exe"
             VALUE "ProductName", "胶囊坞 CapsuleDock"
-            VALUE "ProductVersion", "0.6.61"
-            VALUE "FileVersion", "0.6.61"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "FileVersion", "1.0.0"
         END
     END
     BLOCK "VarFileInfo"
