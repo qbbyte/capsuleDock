@@ -2736,6 +2736,43 @@ fn clock_period_visually_centers_with_digits() {
     }
 }
 
+/// 坞体大小由视口层（`set_root_viewport_scale`）统一缩放，绘制阶段一律是逻辑单位。
+/// 系统状态圆环若再把 `island_scale()` 乘进 `draw_sysmon` 的本地系数 `k`，
+/// 就会被缩放两次。这里锁住「绘制半径不随 island_size 变化」这个不变量。
+#[test]
+fn sysmon_ring_radius_is_independent_of_island_size() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    // draw_sysmon 里 r = 8.2 * k，k 固定 1.0；线宽 2.6 用来把圆环和普通圆点区分开。
+    const RING_RADIUS: f32 = 8.2;
+    const RING_STROKE: f32 = 2.6;
+    let mut measured: Vec<(u32, Vec<f32>)> = Vec::new();
+    for island_size in [80u32, 100, 140] {
+        let mut h=H::new();
+        h.app.settings.show_sysmon=true;
+        h.app.settings.island_size=island_size;
+        // 复现 main.rs 每帧做的事：把坞体倍率交给视口层，而不是绘制层。
+        eframe::set_root_viewport_scale(h.app.settings.island_scale());
+        h.hover(H::local(209.5, 30.0), 2.0);
+        let radii: Vec<f32> = h.shapes.iter().filter_map(|s| match &s.shape {
+            egui::Shape::Circle(c) if (c.stroke.width - RING_STROKE).abs() < 0.01 => Some(c.radius),
+            _ => None,
+        }).collect();
+        assert_eq!(radii.len(), 2, "island_size={island_size}% 应画出 CPU / MEM 两个底环，实际 {radii:?}");
+        measured.push((island_size, radii));
+    }
+    eframe::set_root_viewport_scale(1.0);
+    for (island_size, radii) in &measured {
+        for radius in radii {
+            assert!(
+                (radius - RING_RADIUS).abs() < 0.01,
+                "island_size={island_size}% 时圆环半径应为逻辑单位 {RING_RADIUS}（视口层负责缩放），\
+                 实际 {radius}；若这里变成了 {}，说明 island_scale 被重复乘进了 draw_sysmon",
+                RING_RADIUS * (*island_size as f32 / 100.0),
+            );
+        }
+    }
+}
+
 #[test]
 fn avoidance_picker_add_remove_and_save() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());

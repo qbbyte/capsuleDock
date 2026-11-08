@@ -1426,21 +1426,32 @@ impl App {
     /// 左右停靠时竖排内容随展开淡出，顶栏随面板内容淡入。
     /// 系统状态：CPU / 内存双圆环，圆心放两位数字。
     /// 底环用类型色区分（CPU 青 / MEM 粉）；进度弧正常用类型色，偏高/危险时切告警色（琥珀→红）。
+    ///
+    /// `k` 是圆环自身的本地缩放系数，只用来让半径、线宽、间距、字号整体联动，
+    /// 便于单独微调圆环相对其他组件的比例。坞体大小（80%–140%）不在这里处理：
+    /// 它由 `eframe::set_root_viewport_scale` 在视口层统一放大整个画布，绘制阶段的
+    /// 坐标一律是逻辑单位。因此这里**不要**乘 `Settings::island_scale()`，
+    /// 否则圆环会被缩放两次。
     fn draw_sysmon(&self, c: &Card, cx: f32, cy: f32) {
-        let r = 6.5;
-        let off = 9.0;
-        let w = 2.2;
+        let k = 1.0;
+        let r = 8.2 * k;
+        let w = 2.6 * k;
+        let off = 11.0 * k;
         // (圆心 x 偏移, 显示值, 类型)：0 = CPU（青），1 = MEM（粉）
         let items = [(-off, self.cpu_shown, 0usize), (off, self.mem_shown, 1usize)];
         for &(dx, val, kind) in &items {
-            let frac = (val / 100.0).clamp(0.0, 1.0);
-            // 底环（轨道）：暗调类型色，用于区分 CPU / MEM
-            c.ring(cx + dx, cy, r, w, Self::sysmon_track(kind));
-            // 进度弧：从正上方顺时针；正常=类型色，≥60% 琥珀，≥85% 红
+            let frac = ((val / 100.0).clamp(0.0, 1.0)).max(0.02);
+            let col = Self::sysmon_arc(kind, val);
+            // 底环（轨道）：类型色半透明，与电量圆环一致的视觉语言
+            c.ring(cx + dx, cy, r, w, crate::paint::alpha(col, 0.22));
             let a0 = -std::f32::consts::FRAC_PI_2;
-            let a1 = a0 + frac * std::f32::consts::TAU;
-            c.arc(cx + dx, cy, r, a0, a1, w, Self::sysmon_arc(kind, val));
-            c.centered_text(cx + dx, cy, &format!("{:.0}", val.min(100.0)), 8.0, W::Bold, Self::sysmon_type(kind), H::Center);
+            // 进度弧：从正上方顺时针；满进度画完整环，否则画弧
+            if frac >= 0.999 {
+                c.ring(cx + dx, cy, r, w, col);
+            } else {
+                c.arc(cx + dx, cy, r, a0, a0 + std::f32::consts::TAU * frac, w, col);
+            }
+            c.centered_text(cx + dx, cy, &format!("{:.0}", val.min(100.0)), 6.6 * k, W::Bold, col, H::Center);
         }
     }
 
@@ -1448,12 +1459,6 @@ impl App {
     fn sysmon_type(kind: usize) -> Color32 {
         if kind == 0 { Color32::from_rgb(80, 200, 230) }
         else { Color32::from_rgb(235, 120, 200) }
-    }
-
-    /// 底环轨道色：类型色的暗调版本，避免抢进度弧的视觉。
-    fn sysmon_track(kind: usize) -> Color32 {
-        if kind == 0 { Color32::from_rgb(34, 70, 84) }
-        else { Color32::from_rgb(74, 42, 64) }
     }
 
     /// 进度弧颜色：正常负载用类型色（青/粉），偏高（≥60%）琥珀，危险（≥85%）红。
