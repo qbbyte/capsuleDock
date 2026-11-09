@@ -82,6 +82,9 @@ windows = { version = "0.58", features = [
   "UI_Notifications_Management",
   "UI_Notifications", "ApplicationModel",
   "Win32_System_Ole", "Win32_UI_Shell_Common", "Networking_Connectivity",
+  # 网速常驻组件：GetIfTable2 / GetBestInterface 需要 IpHelper，
+  # MIB_IF_ROW2 / MIB_IF_TABLE2 的定义受 Ndis feature 的 cfg 保护，两者缺一不可。
+  "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis",
   "Win32_Devices_DeviceAndDriverInstallation",
   "Win32_Devices_Properties",
   "Win32_Devices_Bluetooth",

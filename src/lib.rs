@@ -31,6 +31,7 @@ mod pet;
 mod bar_layout;
 mod resident_settings;
 pub mod sysmon;
+pub mod netmon;
 mod avoidance;
 mod focus_bar;
 #[cfg(windows)]
