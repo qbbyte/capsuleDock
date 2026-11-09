@@ -89,9 +89,21 @@ impl Layout {
     pub fn clearance(&self, slot: usize) -> f32 {
         self.pet_clearance(slot)
     }
+    /// 组件经过吉祥物时暂时淡出，避免移动中相互遮挡。
+    ///
+    /// 阈值以「两槽中心距」衡量，且**必须相对 `GAP` 表达**：原来的魔数 14 / 24
+    /// 是按旧 `GAP = 12` 校准的，`GAP` 收到 6 后静止排列的中心距随之变小，
+    /// 会落进淡出区间，导致时钟 / 状态组件被持续淡出（约 10%），而不是只在移动时淡出。
+    ///
+    /// 语义：中心距 ≥ 半宽和 + 一个 `GAP`（正常并排）完全不淡出；缩到半宽和
+    /// （刚好贴住）时完全淡出。静止排列时相邻组件恰好相距「半宽和 + `GAP`」，
+    /// 因此静止态恒为 1.0，与 `GAP` 取什么值无关。
     pub fn pet_clearance(&self, slot: usize) -> f32 {
         match (self.x[slot], self.x[PET]) {
-            (Some(x), Some(pet)) => smoothstep(self.widths[slot] / 2.0 + 14.0, self.widths[slot] / 2.0 + 24.0, (x - pet).abs()),
+            (Some(x), Some(pet)) => {
+                let apart = self.widths[slot] / 2.0 + self.widths[PET] / 2.0;
+                smoothstep(apart, apart + GAP, (x - pet).abs())
+            }
             _ => 1.0,
         }
     }

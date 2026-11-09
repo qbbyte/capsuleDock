@@ -445,12 +445,14 @@ mod netspeed_tests {
     #[test]
     fn short_group_hands_spare_width_to_the_long_one() {
         let slot = crate::bar_layout::WIDTHS[crate::bar_layout::NETSPEED];
+        // 取「一长一短但总宽仍放得下」的两组：22 + 13 = 35 ≤ avail(36)，不触发缩字号。
+        // 注意不能用 26 + 13：那是 39 > 36，缩字号本身就是正确行为，会误判成缺陷。
         let (short_size, _, x1_short) = netspeed_alloc(13.0, 13.0, slot);
-        let (long_size, long_x0, x1_long) = netspeed_alloc(26.0, 13.0, slot);
+        let (long_size, long_x0, x1_long) = netspeed_alloc(22.0, 13.0, slot);
         assert_eq!(short_size, NETSPEED_BASE);
-        assert_eq!(long_size, NETSPEED_BASE, "一长一短无需缩字号");
+        assert_eq!(long_size, NETSPEED_BASE, "总宽放得下时无需缩字号");
         assert!(x1_long > x1_short + 2.0, "下行变长时上行组应右移，而不是各占死半槽");
-        let total = NETSPEED_FIXED + 26.0 + 13.0;
+        let total = NETSPEED_FIXED + 22.0 + 13.0;
         assert!((long_x0 + total / 2.0).abs() < 0.01, "整组应在槽内水平居中");
     }
 

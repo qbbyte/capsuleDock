@@ -1212,7 +1212,11 @@ fn battery_module_hides_power_in_collapsed_and_expanded_headers() {
         let mut h=H::new();
         h.app.settings.pet=false;
         h.app.settings.show_battery=false;
-        if expanded {h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);} else {h.frame(vec![]);}
+        // 先悬停药丸中心展开面板，再把光标移到顶栏组左侧的空白处：
+        // 组起点是 HEADER_LEFT(16)，local x=8 不会压到任何组件。若一直停在
+        // 药丸中心，光标会恰好落在某个状态组件上，其悬停提示框会随组件在
+        // 开关切换时的位移而出现/消失，让下面的 shapes 全等断言变得不稳定。
+        if expanded {h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);h.hover(H::local(8.0,12.0),0.3);} else {h.frame(vec![]);}
         let baseline=h.shapes.clone();
         h.power=(Some(80),true);
         h.t-=1.0/60.0;h.frame(vec![]);
@@ -1439,7 +1443,7 @@ fn mascot_stays_beside_the_clock_and_all_resident_components(){
     h.app.pomo.running=true;h.app.pomo.remaining=1200.0;
     for _ in 0..120 {h.frame(vec![]);}let width=h.app.current_width();
     h.app.settings.pet=true;for _ in 0..120 {h.frame(vec![]);}
-    assert!((h.app.current_width()-width-44.0).abs()<0.1,"胶囊坞应有独立常驻位置");
+    assert!((h.app.current_width()-width-h.app.pet_space()).abs()<0.1,"胶囊坞应有独立常驻位置");
     assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.text()=="09:41")),"胶囊坞与时钟共存");
     assert!(h.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::Path(p) if p.points.len()==13 && (p.stroke.width-3.6).abs()<0.01)).count()>=2,"没有闲置或悬停也应显示眼睛");
 }
@@ -1977,7 +1981,7 @@ fn full_notifications_return_when_island_lyrics_are_not_visible(){
         if music {h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,duration:120.0,..Default::default()};}
         for _ in 0..90{h.frame(vec![]);}h.app.alert("大写锁定","已开启",5,false);for _ in 0..60{h.frame(vec![]);}
         for label in ["大写锁定","已开启"]{assert!(h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.text()==label&&t.opacity_factor>0.9&&s.clip_rect.contains(t.visual_bounding_rect().center()))),"非坞上歌词状态应直接显示通知文案：{label}");}
-        assert!((h.app.current_width()-crate::app::HUD_W-44.0).abs()<1.0,"完整提示保留吉祥物与文案的宽度");
+        assert!((h.app.current_width()-crate::app::HUD_W-h.app.pet_space()).abs()<1.0,"完整提示保留吉祥物与文案的宽度");
     }
 }
 
@@ -3624,4 +3628,93 @@ fn shelf_menu_last_action_fits_inside_window_and_works(){
     assert!(h.app.morph.open);
     h.click(label.center());
     assert!(h.app.shelf.items.is_empty());
+}
+
+/// 展开顶栏组的不变量：网速与音乐指示器必须分开，整组不能压到右侧齿轮。
+/// 回归背景：音乐指示器展开位置曾是硬编码 367，顶栏新增 CPU / 内存 / 网速后
+/// 组右端涨到约 357，与音乐左端只差 3 个逻辑单位，视觉上「挤在一起」。
+/// 这里对 `header_group` 做纯计算断言，覆盖全部开关组合与最坏文本宽度。
+#[test]
+fn header_group_keeps_net_speed_and_music_apart(){
+    use crate::app::{header_group, GEAR_R, HEADER_GAP, HEADER_LEFT, HEADER_MUSIC_W, SETTINGS_BTN_X, SETTINGS_BTN_SIZE};
+    use crate::bar_layout as bar;
+    // 日期 / 时钟的最坏宽度：`10月28日 周三` 与 12 小时制的 `下午 11:59` 前缀。
+    for &(date_w, clock_w) in &[(66.0f32, 44.0f32), (48.0, 34.0), (86.0, 52.0)] {
+        for battery in [false, true] {
+            for music in [false, true] {
+                for cpu in [false, true] {
+                    for mem in [false, true] {
+                        for net in [false, true] {
+                            let (gx, gap) = header_group(battery, music, date_w, clock_w, cpu, mem, net);
+                            // 复现绘制层的顺序摆位，算出各组件左右端。
+                            let mut x = gx + if battery { 24.0 } else { 0.0 };
+                            let clock_left = x + date_w + gap;
+                            x = clock_left + clock_w;
+                            let mut net_right = x;
+                            if cpu { x += gap + bar::WIDTHS[bar::CPU]; }
+                            if mem { x += gap + bar::WIDTHS[bar::MEM]; }
+                            if net { net_right = x + gap + bar::WIDTHS[bar::NETSPEED]; x = net_right; }
+                            let music_left = x + gap;
+                            let group_right = if music { music_left + HEADER_MUSIC_W } else { net_right };
+
+                            // 1) 网速与音乐之间必须真的留出间距，不能贴在一起。
+                            if net && music {
+                                let air = music_left - net_right;
+                                assert!(air >= 3.0 - 1e-3,
+                                    "网速与音乐指示器间距过小：{air:.2}（battery={battery} cpu={cpu} mem={mem} net={net}）");
+                            }
+                            // 2) 整组不能压到齿轮圆，也不能越出面板左缘。
+                            let gear_left = SETTINGS_BTN_X + SETTINGS_BTN_SIZE / 2.0 - GEAR_R;
+                            assert!(group_right <= gear_left - 4.0 + 1e-3,
+                                "顶栏整组压到齿轮：右端 {group_right:.2} > 齿轮左缘 {gear_left:.2} - 4");
+                            assert!(gx >= HEADER_LEFT - 1e-3, "顶栏整组越出面板左缘：起点 {gx:.2}");
+                            // 3) 间距只能在 [3, HEADER_GAP] 内。
+                            assert!((3.0 - 1e-3..=HEADER_GAP + 1e-3).contains(&gap), "顶栏间距越界：{gap:.2}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/// 展开面板顶部有 HEADER_H 高的顶栏安全区，页面内容整体下移。
+/// 页码豆画在平移后的内容 Card 上，其 y 必须以「内容区高度」为基准，
+/// 不能用含安全区的整面板高——否则会重复减一次 HEADER_H，跑到面板外被裁剪。
+/// 回归背景：安全区落地后豆子从可见区消失，且此前完全没有测试覆盖页码豆。
+#[test]
+fn page_dots_stay_inside_the_visible_panel(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.2);
+    assert!(h.app.morph.open,"悬停后应展开面板");
+    let panel=h.app.island_rect(Rect::from_min_size(Pos2::ZERO,Vec2::new(WIN_W,WIN_H)),PW,h.app.expanded_height());
+    // 面板高 = 内容区 140 + 顶栏安全区，页码豆必须落在面板下沿之内。
+    let content_h=panel.height()-crate::app::HEADER_H;
+    let dot_y=panel.top()+content_h-7.2;
+    assert!(dot_y+2.0<=panel.bottom()+0.01,
+        "页码豆越出面板下沿：豆底 {:.1} > 面板底 {:.1}",dot_y+2.0,panel.bottom());
+    // 命中区也要完整在面板内，否则看得见却点不到。
+    assert!(dot_y-6.0>=panel.top() && dot_y+6.0<=panel.bottom()+0.01,
+        "页码豆命中区越出面板：{:.1}..{:.1}，面板 {:.1}..{:.1}",
+        dot_y-6.0,dot_y+6.0,panel.top(),panel.bottom());
+    // 真的能点到：从当前页点下一个豆子。
+    let from=h.app.nav.page;
+    let pages:Vec<_>=h.app.settings.page_order.iter().copied()
+        .filter(|p|h.app.settings.visible_pages[*p]).collect();
+    assert!(pages.len()>=2,"至少要有两页才能点页码豆");
+    let next=pages.iter().copied().find(|p|*p!=from).unwrap();
+    // 豆子整行居中，逐个累加宽度即可定位到目标豆。
+    let gap=4.0;
+    let total:f32=pages.iter().map(|p|h.app.nav.dots[*p].pos).sum::<f32>()+gap*(pages.len()-1) as f32;
+    let mut x=PW/2.0-total/2.0;
+    let mut target=None;
+    for p in pages.iter().copied(){
+        let w=h.app.nav.dots[p].pos.max(3.0);
+        if p==next {target=Some(x+w/2.0);}
+        x+=w+gap;
+    }
+    let cx=target.expect("应能定位到目标页码豆");
+    h.click(H::body(cx,content_h-7.2));
+    assert_eq!(h.app.nav.page,next,"点击页码豆应切到对应页面");
 }

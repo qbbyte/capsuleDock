@@ -21,8 +21,58 @@ pub const PW: f32 = 419.0; // 展开面板宽
 /// 展开面板顶部为顶栏预留的安全区高度。页面内容整体下移这么多，
 /// 顶栏（电池 / 日期 / 时钟 / 状态组件 / 齿轮）独占一条，不再压住页面。
 pub(crate) const HEADER_H: f32 = 28.0;
+/// 展开顶栏各组件之间的前导间距。顶栏横向空间比收起药丸宽裕，用比 `bar::GAP` 稍大的值，
+/// 让电池 / 日期 / 时钟 / 状态组件 / 音乐指示器之间不显拥挤。
+pub(crate) const HEADER_GAP: f32 = 8.0;
+/// 展开顶栏整组可占用的横向区间：左起 `HEADER_LEFT`，右止齿轮圆的左缘。
+/// 顶栏组件数量随开关变化，居中前必须按这个区间夹紧，否则会压到右侧齿轮。
+pub(crate) const HEADER_LEFT: f32 = 16.0;
+/// 顶栏右侧齿轮（设置入口）的命中区左缘与边长，绘制中心为左缘加半个边长。
+pub(crate) const SETTINGS_BTN_X: f32 = 380.0;
+pub(crate) const SETTINGS_BTN_SIZE: f32 = 28.0;
+/// 齿轮圆的半径。顶栏组的右边界取它的左缘（而不是命中区左缘），
+/// 让整组真正与齿轮「圆」拉开距离；绘制与布局共用这一份常量。
+pub(crate) const GEAR_R: f32 = 13.0;
+/// 展开态音乐指示器（五根跳动竖条）的实际绘制宽度。
+/// 注意不能复用 `bar::WIDTHS[bar::MUSIC]`：那是**收起药丸**的槽宽（14），
+/// 而竖条在 `paint::playback_bars` 里从 `cx-7.8` 铺到 `cx+9.7`，实宽约 17.5。
+/// 顶栏布局若按 14 预留，会少算 4 点，把「音乐 → 齿轮」的余量悄悄吃掉。
+pub(crate) const HEADER_MUSIC_W: f32 = 18.0;
 /// 展开面板高 = 原来的 140 内容区 + 顶部顶栏安全区。
 pub const PH: f32 = 140.0 + HEADER_H; // 展开面板高
+
+/// 展开顶栏整组的横向布局：返回整组起点 `x` 与统一间距 `gap`。
+///
+/// 顶栏终点排列为 `[电池][日期][时钟][CPU][内存][网速][音乐]`，整体在
+/// `[HEADER_LEFT, 齿轮圆左缘]` 区间内居中。组件数量随开关变化，因此间距不能写死：
+/// 放得下就用 `HEADER_GAP`，放不下（12 小时制前缀 + 全组件开启）等比收窄到 3.0，
+/// 保证整组既不压右侧齿轮，也不越出面板左缘。音乐指示器必须参与计算——它原先是
+/// 硬编码位置，顶栏组件变多后组右端会越过它，两者贴在一起。
+///
+/// 抽成纯函数是为了让测试能直接断言这条不变量，而不是复制一份公式。
+/// 不变量（`ui_tests::header_group_keeps_net_speed_and_music_apart` 锁死）：
+/// 任意开关组合下，整组右端 `gx + group <= 齿轮圆左缘 - 4`。
+pub(crate) fn header_group(show_battery: bool, has_music: bool, date_w: f32, clock_w: f32,
+                           show_cpu: bool, show_mem: bool, show_netspeed: bool) -> (f32, f32) {
+    let battery_space = if show_battery { 24.0 } else { 0.0 };
+    // 电池环实际只占槽位左侧约 15 宽（槽位 24 是给环 + 留白的），按槽位居中会让可见内容偏左，
+    // 因此起点再右移 `lead`。这 6 点必须同时从可用区间里扣掉，否则整组会连同偏移一起顶到齿轮。
+    let lead = if show_battery { 6.0 } else { 0.0 };
+    let content_w = battery_space + date_w + clock_w
+        + if show_cpu { bar::WIDTHS[bar::CPU] } else { 0.0 }
+        + if show_mem { bar::WIDTHS[bar::MEM] } else { 0.0 }
+        + if show_netspeed { bar::WIDTHS[bar::NETSPEED] } else { 0.0 }
+        + if has_music { HEADER_MUSIC_W } else { 0.0 };
+    let gaps = 1 + show_cpu as usize + show_mem as usize + show_netspeed as usize + has_music as usize;
+    let gear_left = SETTINGS_BTN_X + SETTINGS_BTN_SIZE / 2.0 - GEAR_R;
+    // 再留 4 点余量：间距收到下限 3.0 的极端情况下，整组右端最多到 `gear_left - 4`，
+    // 与齿轮圆之间始终还有可见空隙，不会贴着。
+    let avail = (gear_left - HEADER_LEFT - lead - 4.0).max(0.0);
+    let gap = if gaps == 0 { HEADER_GAP } else { ((avail - content_w) / gaps as f32).clamp(3.0, HEADER_GAP) };
+    let group = content_w + gap * gaps as f32;
+    let gx = HEADER_LEFT + lead + ((avail - group) / 2.0).max(0.0);
+    (gx, gap)
+}
 pub const BAR_W: f32 = 163.0; // 收起药丸宽
 pub const BAR_H: f32 = 30.0; // 收起药丸高
 pub(crate) const HUD_W: f32 = 260.0;
@@ -753,7 +803,12 @@ impl App {
 
     fn effective_minimal(&self)->bool {self.settings.minimal || self.browser_minimal_active}
     pub(crate) fn pet_enabled(&self)->bool {self.settings.pet && !self.effective_minimal() && !self.side()}
-    pub(crate) fn pet_space(&self)->f32 {if self.pet_enabled(){44.0}else{0.0}}
+    /// 吉祥物给坞体带来的额外宽度：它自己的槽宽加一个前导间距。
+    /// 必须从 `WIDTHS` / `GAP` 推导，不能写死——`GAP` 从 12 收到 6 后，
+    /// 原来的常量 44（= 32 + 12）就与布局实际占位 38（= 32 + 6）脱节了。
+    pub(crate) fn pet_space(&self)->f32 {
+        if self.pet_enabled(){bar::WIDTHS[bar::PET]+bar::GAP}else{0.0}
+    }
     fn lyric_focus_space(&self)->f32 {if self.pomo.running{crate::focus_bar::LYRIC_WIDTH+10.0}else{0.0}}
     fn lyric_bar_width(&self)->f32 {LYRIC_BAR_W+if self.pet_enabled(){48.0}else{0.0}+self.lyric_focus_space()}
     fn notice_size(&self,a:&Alert)->(f32,f32) {
@@ -1375,27 +1430,29 @@ impl App {
         let m = anim::ease_in_out(smoothstep(0.0, 0.85, p));
         let clock = self.settings.clock_text(&env.clock);
         let show_battery=self.settings.show_battery && env.battery.is_some();
+        let has_music=self.media.is_music();
 
-        // 顶栏终点布局：[电池][日期][时钟][CPU][内存][网速] 作为一组整体居中。
-        // 可选组件的前导间距与药丸态共用 bar::GAP，关闭时连间距一起消失，避免留下空档。
-        // 槽宽统一取 bar::WIDTHS，与药丸态布局、设置预览共用一份，避免三处硬编码漂移。
+        // 顶栏终点布局：[电池][日期][时钟][CPU][内存][网速][音乐] 作为一组整体居中。
+        // 组起点与统一间距由 header_group 统一算（含「放不下就收窄」的夹紧），
+        // 这里只负责按顺序把各组件摆到位置上。
         let date_w = base.text_w(&env.date, size::DATE, W::Regular);
         let clock_w = paint::clock_width(base,&clock,size::CLOCK);
-        let battery_space=if show_battery {24.0}else{0.0};
-        let cpu_slot_w = if self.settings.show_cpu {bar::GAP + bar::WIDTHS[bar::CPU]}else{0.0};
-        let mem_slot_w = if self.settings.show_mem {bar::GAP + bar::WIDTHS[bar::MEM]}else{0.0};
-        let net_slot_w = if self.settings.show_netspeed {bar::GAP + bar::WIDTHS[bar::NETSPEED]}else{0.0};
-        let group = battery_space + date_w + 8.0 + clock_w + cpu_slot_w + mem_slot_w + net_slot_w;
-        let gx = local_cx - group / 2.0 + if show_battery {6.0}else{0.0};
+        let (gx, gap) = header_group(show_battery, has_music, date_w, clock_w,
+            self.settings.show_cpu, self.settings.show_mem, self.settings.show_netspeed);
+        let battery_space = if show_battery {24.0}else{0.0};
         let hb = (gx + 8.5, 18.6);
         let hd = gx + battery_space;
-        let hc = hd + date_w + 8.0;
+        let hc = hd + date_w + gap;
         let clock_right = hc + clock_w;
-        let hcpu_center = clock_right + bar::GAP + bar::WIDTHS[bar::CPU] / 2.0;
-        let hmem_center = clock_right + cpu_slot_w + bar::GAP + bar::WIDTHS[bar::MEM] / 2.0;
-        let hn_center = clock_right + cpu_slot_w + mem_slot_w + bar::GAP + bar::WIDTHS[bar::NETSPEED] / 2.0;
+        let cpu_slot_w = if self.settings.show_cpu {gap + bar::WIDTHS[bar::CPU]}else{0.0};
+        let mem_slot_w = if self.settings.show_mem {gap + bar::WIDTHS[bar::MEM]}else{0.0};
+        let net_slot_w = if self.settings.show_netspeed {gap + bar::WIDTHS[bar::NETSPEED]}else{0.0};
+        let hcpu_center = clock_right + gap + bar::WIDTHS[bar::CPU] / 2.0;
+        let hmem_center = clock_right + cpu_slot_w + gap + bar::WIDTHS[bar::MEM] / 2.0;
+        let hn_center = clock_right + cpu_slot_w + mem_slot_w + gap + bar::WIDTHS[bar::NETSPEED] / 2.0;
+        // 音乐指示器紧跟网速之后；未播放音乐时不占位，后续元素不会留空档。
+        let hmusic_center = clock_right + cpu_slot_w + mem_slot_w + net_slot_w + gap + HEADER_MUSIC_W / 2.0;
         // 药丸起点布局
-        let has_music=self.media.is_music();
         let layout=self.resident.current();
         let pb=(local_cx+layout.x[bar::BATTERY].unwrap_or(0.0),15.0);
         let pcx=local_cx+layout.x[bar::CLOCK].unwrap()-paint::clock_width(base,&clock,size::PILL_CLOCK)/2.0;
@@ -1465,7 +1522,9 @@ impl App {
             }
         }
         if has_music && (p>0.1 || layout.x[bar::MUSIC].is_some()) {
-            paint::playback_bars(base,lerp(local_cx+layout.x[bar::MUSIC].unwrap_or(0.0),367.0,m),lerp(15.0,18.0,m),self.t,self.media.playing,theme::WHITE);
+            // 展开后并入顶栏组、紧跟在状态组件之后；收起态仍按药丸槽位。
+            let mx = if layout.x[bar::MUSIC].is_some() {local_cx+layout.x[bar::MUSIC].unwrap()} else {hmusic_center};
+            paint::playback_bars(base,lerp(mx,hmusic_center,m),lerp(15.0,18.0,m),self.t,self.media.playing,theme::WHITE);
         }
         let compact_alpha=1.0-smoothstep(0.0,0.22,p);
         if self.t<self.notices.notification_bell_until&&!self.compact_notices()&&p<0.1 {
@@ -1573,10 +1632,12 @@ impl App {
     // 面板主体：页标题 + 页面（带切页过渡）+ 翻页箭头 + 页码豆
     // ---------------------------------------------------------------
     fn panel_body(&mut self, c: &Card, env: &Env, cmds: &mut Vec<Cmd>) {
-        let settings=c.hit(380.0,4.0,28.0,28.0,"page-settings").on_hover_text(format!("打开{}设置窗口",PAGE_NAMES[self.nav.page]));
+        // 齿轮固定在顶栏行右侧，绘制中心由命中区推导，与顶栏组的右边界共用一份常量。
+        let gear_cx = SETTINGS_BTN_X + SETTINGS_BTN_SIZE / 2.0;
+        let settings=c.hit(SETTINGS_BTN_X,4.0,SETTINGS_BTN_SIZE,SETTINGS_BTN_SIZE,"page-settings").on_hover_text(format!("打开{}设置窗口",PAGE_NAMES[self.nav.page]));
         let (hover,press)=c.hover_t(&settings);
-        c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
-        paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
+        c.circle(gear_cx,18.0,GEAR_R,Color32::from_white_alpha((hover*24.0) as u8));
+        paint::gear(&c.scaled(gear_cx,18.0,0.8*(1.0-press*0.08)),gear_cx,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
         if settings.clicked(){self.settings_tab=[1,2,4,3][self.nav.page];self.open_settings();}
         // 顶栏独占面板顶部 HEADER_H 高的一条安全区：以下内容整体下移，
         // 展开后不再覆盖日期 / 状态组件，也不会被顶栏压住封面与页标题。
@@ -1641,7 +1702,10 @@ impl App {
         if r.clicked() { self.navigate_page(true); }
         // 页码豆：宽度由弹簧驱动，整行实时居中；当前页是白色长条
         let gap = 4.0;
-        let dot_y=self.expanded_height()-7.2;
+        // `c` 已经是平移过 HEADER_H 的内容坐标系，所以这里必须按**内容区高度**算底部，
+        // 不能再用 `expanded_height()`（那是含安全区的整面板高）：否则豆子会跑到面板外
+        // 被裁剪掉，肉眼看不见、也点不到。
+        let dot_y = PH - HEADER_H - 7.2;
         let total: f32 = pages.iter().map(|page| self.nav.dots[*page].pos).sum::<f32>() + gap * (pages.len()-1) as f32;
         let mut x = PW / 2.0 - total / 2.0;
         let mut clicked = None;
@@ -1701,7 +1765,13 @@ impl App {
     fn tick(&mut self, env: &Env, dt: f32, elapsed: f32) {
         if self.toast.as_ref().is_some_and(|(_,at)|self.t-at>2.4){self.toast=None;}
         // 本机状态：每 2 秒采样一次 CPU / 内存（窗口更长，读数更稳），缓动量让圆环平滑跟上。
-        self.sysmon.sample_if_ready(std::time::Duration::from_secs(2));
+        // 两个组件都关闭时停采样并丢弃基线，与网速的处理保持一致：既不做无谓的系统调用，
+        // 重新打开后也不会因为基线过旧而显示一段陈旧的平均值。
+        if self.settings.show_cpu || self.settings.show_mem {
+            self.sysmon.sample_if_ready(std::time::Duration::from_secs(2));
+        } else {
+            self.sysmon.pause();
+        }
         self.cpu_shown = anim::approach(self.cpu_shown, self.sysmon.cpu, 4.0, dt);
         self.mem_shown = anim::approach(self.mem_shown, self.sysmon.mem, 4.0, dt);
         // 网速：约 1 秒一次，只统计默认路由网卡；关闭时停采样并清空基线，

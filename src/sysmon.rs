@@ -38,6 +38,16 @@ impl SysMon {
             self.cpu_prev = Some((idle, total));
         }
     }
+
+    /// CPU 与内存组件都关闭时停止采样，并丢弃上一次的基线。
+    ///
+    /// 为什么要丢基线：CPU 占用是「两次采样的空闲 / 总时间差」推算出来的比例，
+    /// 基线留太久的话，重新打开后的第一次恢复会把中间几十秒的窗口一起平均进来，
+    /// 显示一个陈旧的均值而不是最近两秒的占用。清掉后从 0 重新起步，
+    /// 与 `NetSpeed::pause` 的语义保持一致。
+    pub fn pause(&mut self) {
+        self.cpu_prev = None;
+    }
 }
 
 /// 返回 (空闲时间, 总时间)，单位 100ns；`total` 已包含内核时间（其中含空闲）。
@@ -62,5 +72,25 @@ unsafe fn memory_load() -> f32 {
         info.dwMemoryLoad as f32
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pause_drops_the_baseline_so_cpu_restarts_clean() {
+        let mut mon = SysMon::default();
+        // 首次采样建立基线（CPU 记为 0）。
+        mon.sample_if_ready(Duration::from_secs(0));
+        assert!(mon.cpu_prev.is_some(), "首次采样应建立基线");
+        // 关闭组件：基线必须清掉，否则重新打开时会把停采期间的空档一起平均进来。
+        mon.pause();
+        assert!(mon.cpu_prev.is_none(), "pause 应丢弃 CPU 基线");
+        // 重新打开：第一次恢复只建立新基线，不产生跳变读数。
+        mon.sample_if_ready(Duration::from_secs(0));
+        assert!(mon.cpu_prev.is_some(), "恢复采样后应重新建立基线");
+        assert_eq!(mon.cpu, 0.0, "恢复后的首帧不应直接给出陈旧的占用值");
     }
 }

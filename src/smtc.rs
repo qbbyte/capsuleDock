@@ -570,7 +570,9 @@ fn other_clients_repeated_samples_keep_the_clock_running() {
     for source in ["QQMusic.exe","SodaMusic.exe","Spotify.exe","cloudmusic.exe","msedge.exe"] {
         let mut clock=PlaybackClock::default();
         let start=std::time::Instant::now();
-        let mut media=NowPlaying{source:source.into(),title:"歌曲".into(),artist:"歌手".into(),album:"专辑".into(),
+        // 浏览器（msedge）走「专辑与标题相同才算歌曲页」的通用规则，因此这里
+        // 用 title == album，其余音乐客户端不要求专辑信息。
+        let mut media=NowPlaying{source:source.into(),title:"歌曲".into(),artist:"歌手".into(),album:"歌曲".into(),
             position:10.0,duration:120.0,playing:true,sampled_at:Some(start),..Default::default()};
         clock.update(&mut media);
         for second in 1..=5 {
@@ -589,9 +591,12 @@ fn other_clients_repeated_samples_keep_the_clock_running() {
             match change {
                 0=>media.playing=false,
                 1=>media.playing=true,
-                2=>media.title="新歌".into(),
+                // title / album 是「浏览器源是否算歌曲」的判定依据（专辑与标题相同才算歌曲页），
+                // 因此两者必须同步改；只改其一会让媒体在循环中途变成 Video，
+                // 后面的断言就都落到视频分支上，测不到「状态变化重置时钟」了。
+                2=>{media.title="新歌".into();media.album="新歌".into();}
                 3=>media.artist="另一歌手".into(),
-                4=>media.album="另一专辑".into(),
+                4=>media.album="新专辑".into(),
                 5=>media.song_id=Some(123),
                 _=>media.source="另一个播放器".into(),
             }
