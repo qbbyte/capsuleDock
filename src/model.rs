@@ -208,8 +208,12 @@ pub struct Settings {
     pub visible_pages: [bool; 4],
     pub page_order: [usize; 4],
     pub show_battery: bool,
-    /// 坞内常驻显示 CPU 与内存占用圆环。
-    pub show_sysmon: bool,
+    /// 坞内常驻显示 CPU 占用圆环。
+    pub show_cpu: bool,
+    /// 坞内常驻显示内存占用圆环。
+    pub show_mem: bool,
+    /// 坞内常驻显示当前网卡的下载 / 上传速率（默认关闭，不打扰老用户）。
+    pub show_netspeed: bool,
     pub clock_12h: bool,
     pub clock_period: u8,
     pub resident_order: Vec<usize>,
@@ -229,7 +233,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { display_id: String::new(), skin: Skin::Classic, island_shape: IslandShape::Notch, glass_blur: true, island_size: 100, island_offset: 0, dock: Dock::Top, settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, avoid_browsers: true, avoid_apps: Vec::new(), visible_pages: [true; 4], page_order: [0,1,2,3], show_battery: true, show_sysmon: true, clock_12h: false, clock_period: 0, resident_order: Vec::new(), system_hud: true, bluetooth_notifications: true, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, clipboard_history: true }
+        Self { display_id: String::new(), skin: Skin::Classic, island_shape: IslandShape::Notch, glass_blur: true, island_size: 100, island_offset: 0, dock: Dock::Top, settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, avoid_browsers: true, avoid_apps: Vec::new(), visible_pages: [true; 4], page_order: [0,1,2,3], show_battery: true, show_cpu: true, show_mem: true, show_netspeed: false, clock_12h: false, clock_period: 0, resident_order: Vec::new(), system_hud: true, bluetooth_notifications: true, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, clipboard_history: true }
     }
 }
 
@@ -259,7 +263,10 @@ impl Settings {
 
     pub fn load() -> Self {
         let mut s = Self::default();
-        for (k, v) in read_kv(&config_dir().join("settings.txt")) {
+        let pairs = read_kv(&config_dir().join("settings.txt"));
+        // 旧字段 show_sysmon 是「CPU + 内存」总开关；文件里一旦出现拆分后的新字段，就不再让它覆盖。
+        let has_split = pairs.iter().any(|(k, _)| k.as_str() == "show_cpu" || k.as_str() == "show_mem");
+        for (k, v) in pairs {
             match k.as_str() {
                 "settings_theme" => s.settings_theme=crate::settings_theme::SettingsTheme::parse(&v),
                 "display_id" => s.display_id = v,
@@ -279,14 +286,27 @@ impl Settings {
                 "avoid_browsers" => s.avoid_browsers = v != "0",
                 "avoid_apps" => s.avoid_apps = serde_json::from_str(&v).unwrap_or_default(),
                 "resident_order" => {
-                    let order:Vec<usize>=v.split(',').filter_map(|n|n.parse().ok()).collect();
-                    if crate::bar_layout::valid_order(&order){s.resident_order=order;}
-                    else if order.len()==5 && [crate::bar_layout::BATTERY,crate::bar_layout::PET,crate::bar_layout::CLOCK,crate::bar_layout::MUSIC,crate::bar_layout::FOCUS].iter().all(|s| order.contains(s)) {
-                        // 旧版五位顺序（无系统状态组件）：补上 SYSMON，放在时钟之后。
-                        let mut migrated=order;
-                        if let Some(pos)=migrated.iter().position(|s| *s==crate::bar_layout::CLOCK){migrated.insert(pos+1,crate::bar_layout::SYSMON);} else {migrated.push(crate::bar_layout::SYSMON);}
-                        s.resident_order=migrated;
+                    use crate::bar_layout::{BATTERY,PET,CLOCK,MUSIC,FOCUS,CPU,MEM,NETSPEED};
+                    let insert_after=|order:&mut Vec<usize>,anchor:usize,slot:usize|{
+                        let pos=order.iter().position(|s|*s==anchor).map(|p|p+1).unwrap_or(order.len());
+                        order.insert(pos,slot);
+                    };
+                    let mut migrated:Vec<usize>=v.split(',').filter_map(|n|n.parse().ok()).collect();
+                    // 逐级补齐旧版排列 5 → 6 → 7 → 8 位：每一步沿用上一步的结果，
+                    // 少了任一步，老用户的自定义排列都会被判非法并静默重置为默认顺序。
+                    // 旧版五位（无系统状态组件）：补上 CPU，放在时钟之后。
+                    if migrated.len()==5 && [BATTERY,PET,CLOCK,MUSIC,FOCUS].iter().all(|s| migrated.contains(s)) {
+                        insert_after(&mut migrated,CLOCK,CPU);
                     }
+                    // 1.0.0 六位（无网速组件）：补上 NETSPEED，放在 CPU 之后。
+                    if migrated.len()==6 && [BATTERY,PET,CLOCK,CPU,MUSIC,FOCUS].iter().all(|s| migrated.contains(s)) {
+                        insert_after(&mut migrated,CPU,NETSPEED);
+                    }
+                    // 1.0.0 七位（CPU / 内存还共用一个槽位）：补上 MEM，紧跟 CPU。
+                    if migrated.len()==7 && [BATTERY,PET,CLOCK,CPU,NETSPEED,MUSIC,FOCUS].iter().all(|s| migrated.contains(s)) {
+                        insert_after(&mut migrated,CPU,MEM);
+                    }
+                    if crate::bar_layout::valid_order(&migrated){s.resident_order=migrated;}
                 }
                 "page_order" => {
                     if let Ok(order)=v.split(',').map(str::parse::<usize>).collect::<Result<Vec<_>,_>>() {
@@ -304,7 +324,10 @@ impl Settings {
                 "clock_period" => s.clock_period = v.parse::<u8>().ok().filter(|v|*v<=2).unwrap_or(0),
                 "clock_12h" => s.clock_12h = v == "1",
                 "show_battery" => s.show_battery = v != "0",
-                "show_sysmon" => s.show_sysmon = v != "0",
+                "show_sysmon" if !has_split => { s.show_cpu = v != "0"; s.show_mem = v != "0"; }
+                "show_cpu" => s.show_cpu = v != "0",
+                "show_mem" => s.show_mem = v != "0",
+                "show_netspeed" => s.show_netspeed = v != "0",
                 "visible_pages" if (4..=8).contains(&v.len()) && v.bytes().all(|b| b==b'0' || b==b'1') => {
                     // 新版四位：音乐／专注／置物／待办，与字段一一对应。
                     // 旧版五到八位：前五位固定是 音乐／专注／饮水／置物／待办，第六位往后（日程、邮箱、AI 额度）都已下线。
@@ -353,7 +376,9 @@ impl Settings {
                 ("clock_period".into(), self.clock_period.to_string()),
                 ("clock_12h".into(), (self.clock_12h as u8).to_string()),
                 ("show_battery".into(), (self.show_battery as u8).to_string()),
-                ("show_sysmon".into(), (self.show_sysmon as u8).to_string()),
+                ("show_cpu".into(), (self.show_cpu as u8).to_string()),
+                ("show_mem".into(), (self.show_mem as u8).to_string()),
+                ("show_netspeed".into(), (self.show_netspeed as u8).to_string()),
                 ("system_hud".into(), (self.system_hud as u8).to_string()),
                 ("bluetooth_notifications".into(), (self.bluetooth_notifications as u8).to_string()),
                 ("notifications".into(), (self.notifications as u8).to_string()),

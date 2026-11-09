@@ -888,7 +888,11 @@ impl App {
                         settings_card(ui,|ui|{
                             setting_row(ui,"电量","本机电量、充电状态与提醒；无电池设备自动隐藏",&mut self.settings.show_battery);
                             settings_separator(ui);
-                            setting_row(ui,"电脑状态","坞内常驻显示 CPU 与内存占用圆环",&mut self.settings.show_sysmon);
+                            setting_row(ui,"CPU 占用","坞内常驻显示 CPU 占用率圆环；可单独排序",&mut self.settings.show_cpu);
+                            settings_separator(ui);
+                            setting_row(ui,"内存占用","坞内常驻显示内存占用率圆环；可单独排序",&mut self.settings.show_mem);
+                            settings_separator(ui);
+                            setting_row(ui,"网速","收起时显示默认路由网卡的下载 / 上传速率；只读本机字节计数，不抓包",&mut self.settings.show_netspeed);
                             settings_separator(ui);
                             setting_row(ui,"坞上歌词","收起时显示正在唱的那一句",&mut self.settings.island_lyrics);
                         });

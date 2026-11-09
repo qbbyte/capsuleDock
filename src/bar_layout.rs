@@ -7,13 +7,25 @@ pub(crate) const MUSIC: usize = 2;
 pub(crate) const FOCUS: usize = 3;
 pub(crate) const BELL: usize = 4;
 pub(crate) const PET: usize = 5;
-/// 系统状态组件：CPU / 内存双圆环，紧邻时钟。
-pub(crate) const SYSMON: usize = 6;
-const WIDTHS: [f32; 7] = [44.0, 20.0, 14.0, crate::focus_bar::WIDTH, 20.0, 32.0, 36.0];
+/// CPU 占用圆环。沿用旧版「电脑状态」槽位的数字 6，已保存的排列无需重编号。
+pub(crate) const CPU: usize = 6;
+/// 网速组件：下载 / 上传速率单行横排。
+pub(crate) const NETSPEED: usize = 7;
+/// 内存占用圆环：从旧的双环组件里拆出来的第二个独立槽位。
+pub(crate) const MEM: usize = 8;
+/// 槽宽固定，速率与百分比都用定长格式，数值变化不会让坞体宽度抖动。
+/// CPU / MEM 按「单环 + 两位数百分比」定宽（40），网速是两组「箭头 + 速率」横排（58）；
+/// `100%` 由 `Card::fit_shrink` 缩字号，速率由 `paint::netspeed_alloc` 按两组实际文本宽
+/// 动态分配并统一缩字号，都不必为极端值预留空槽。
+/// 公开给绘制层、展开顶栏布局与设置预览共用，避免同一宽度硬编码三份。
+pub(crate) const WIDTHS: [f32; 9] = [44.0, 20.0, 14.0, crate::focus_bar::WIDTH, 20.0, 32.0, 40.0, 58.0, 40.0];
+/// 相邻常驻组件之间的固定留白。`Layout::new`、`reorder` 与展开顶栏布局共用，避免多处漂移；
+/// 布局计算统一按 `WIDTHS` + `GAP` 取位，调间距只需改这里。
+pub(crate) const GAP: f32 = 6.0;
 
-pub(crate) const DEFAULT_ORDER: [usize; 6] = [BATTERY, PET, CLOCK, SYSMON, MUSIC, FOCUS];
+pub(crate) const DEFAULT_ORDER: [usize; 8] = [BATTERY, PET, CLOCK, CPU, MEM, NETSPEED, MUSIC, FOCUS];
 pub(crate) fn valid_order(order: &[usize]) -> bool {
-    order.len() == 6 && DEFAULT_ORDER.iter().all(|slot| order.iter().filter(|value| *value == slot).count() == 1)
+    order.len() == 8 && DEFAULT_ORDER.iter().all(|slot| order.iter().filter(|value| *value == slot).count() == 1)
 }
 
 pub(crate) fn animations_enabled() -> bool {
@@ -37,18 +49,20 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    pub fn new(battery: bool, music: bool, focus: bool, bell: bool, pet: bool, sysmon: bool) -> Self {
-        fn place(cursor: &mut f32, width: f32) -> f32 { let x = *cursor + width / 2.0; *cursor += width + 12.0; x }
+    pub fn new(battery: bool, music: bool, focus: bool, bell: bool, pet: bool, cpu: bool, mem: bool, netspeed: bool) -> Self {
+        fn place(cursor: &mut f32, width: f32) -> f32 { let x = *cursor + width / 2.0; *cursor += width + GAP; x }
         let mut x = vec![None; WIDTHS.len()];
         let mut cursor = 16.0;
         if battery { x[BATTERY] = Some(place(&mut cursor, WIDTHS[BATTERY])); }
         if pet { x[PET] = Some(place(&mut cursor, WIDTHS[PET])); }
         x[CLOCK] = Some(place(&mut cursor, WIDTHS[CLOCK]));
-        if sysmon { x[SYSMON] = Some(place(&mut cursor, WIDTHS[SYSMON])); }
+        if cpu { x[CPU] = Some(place(&mut cursor, WIDTHS[CPU])); }
+        if mem { x[MEM] = Some(place(&mut cursor, WIDTHS[MEM])); }
+        if netspeed { x[NETSPEED] = Some(place(&mut cursor, WIDTHS[NETSPEED])); }
         for (slot, on) in [(MUSIC, music && !bell), (FOCUS, focus), (BELL, bell)] {
             if on { x[slot] = Some(place(&mut cursor, WIDTHS[slot])); }
         }
-        let width = cursor - 12.0 + 16.0;
+        let width = cursor - GAP + 16.0;
         for value in x.iter_mut().flatten() { *value -= width / 2.0; }
         Self { width: width.max(96.0), x, widths: WIDTHS.to_vec() }
     }
@@ -68,7 +82,7 @@ impl Layout {
             let left = x - self.widths[slot] / 2.0;
             let right = x + self.widths[slot] / 2.0;
             self.x[slot] = Some(cursor + x - left);
-            cursor += right - left + 12.0;
+            cursor += right - left + GAP;
         }
     }
     /// 组件经过吉祥物时暂时淡出，避免移动中相互遮挡。
@@ -89,7 +103,7 @@ pub(crate) struct Motion {
     initialized: bool,
 }
 impl Default for Motion {
-    fn default() -> Self { Self { target: Layout::new(false, false, false, false, false, false), positions: vec![Spring::new(0.0, 360.0, 0.76); 7], initialized: false } }
+    fn default() -> Self { Self { target: Layout::new(false, false, false, false, false, false, false, false), positions: vec![Spring::new(0.0, 360.0, 0.76); WIDTHS.len()], initialized: false } }
 }
 impl Motion {
     pub fn step(&mut self, target: Layout, dt: f32, animate: bool) {
@@ -118,8 +132,8 @@ mod tests {
     use super::*;
     #[test]
     fn clock_12h_keeps_components_separate_in_custom_orders() {
-        for order in [DEFAULT_ORDER, [FOCUS, MUSIC, CLOCK, SYSMON, PET, BATTERY]] {
-            let mut layout = Layout::new(true, true, true, false, true, false);
+        for order in [DEFAULT_ORDER, [FOCUS, MUSIC, CLOCK, CPU, MEM, NETSPEED, PET, BATTERY]] {
+            let mut layout = Layout::new(true, true, true, false, true, false, false, true);
             layout.reorder(&order);
             layout.widen_clock(40.0);
             let mut boxes: Vec<_> = layout.x.iter().enumerate().filter_map(|(i, x)| x.map(|x| {
@@ -127,7 +141,7 @@ mod tests {
                 (x - width / 2.0, x + width / 2.0)
             })).collect();
             boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
-            assert!(boxes.windows(2).all(|p| p[1].0 - p[0].1 >= 6.9));
+            assert!(boxes.windows(2).all(|p| p[1].0 - p[0].1 >= 5.9));
             assert!(boxes.first().unwrap().0 >= -layout.width / 2.0 + 15.9);
             assert!(boxes.last().unwrap().1 <= layout.width / 2.0 - 15.9);
         }
@@ -136,9 +150,12 @@ mod tests {
     fn custom_order_preserves_groups_and_hidden_positions() {
         assert!(!valid_order(&[0, 0, 2, 3, 9]));
         assert!(!valid_order(&[0, 1, 2]));
-        let order = [FOCUS, MUSIC, CLOCK, SYSMON, PET, BATTERY];
+        // 旧版六位 / 七位顺序已不再合法，必须靠 model::Settings::load 迁移。
+        assert!(!valid_order(&[FOCUS, MUSIC, CLOCK, CPU, PET, BATTERY]));
+        assert!(!valid_order(&[FOCUS, MUSIC, CLOCK, CPU, NETSPEED, PET, BATTERY]));
+        let order = [FOCUS, MUSIC, CLOCK, CPU, MEM, NETSPEED, PET, BATTERY];
         for battery in [false, true] {
-            let mut layout = Layout::new(battery, true, true, false, true, false);
+            let mut layout = Layout::new(battery, true, true, false, true, false, false, true);
             let width = layout.width;
             layout.reorder(&order);
             assert_eq!(layout.width, width);
@@ -146,25 +163,50 @@ mod tests {
             assert!(positions.windows(2).all(|p| p[0] < p[1]));
             let mut boxes: Vec<_> = layout.x.iter().enumerate().filter_map(|(i, x)| x.map(|x| (x - layout.widths[i] / 2.0, x + layout.widths[i] / 2.0))).collect();
             boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
-            assert!(boxes.windows(2).all(|p| p[1].0 - p[0].1 >= 6.9));
+            assert!(boxes.windows(2).all(|p| p[1].0 - p[0].1 >= 5.9));
         }
     }
     #[test]
     fn every_component_combination_fits_without_overlaps() {
-        for battery in [false, true] { for music in [false, true] { for focus in [false, true] { for bell in [false, true] { for pet in [false, true] {
-            let layout = Layout::new(battery, music, focus, bell, pet, false);
+        for battery in [false, true] { for music in [false, true] { for focus in [false, true] { for bell in [false, true] { for pet in [false, true] { for netspeed in [false, true] {
+            let layout = Layout::new(battery, music, focus, bell, pet, false, false, netspeed);
             let mut boxes: Vec<_> = layout.x.iter().enumerate().filter_map(|(i, x)| x.map(|x| (x - layout.widths[i] / 2.0, x + layout.widths[i] / 2.0))).collect();
             boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
             assert!(boxes.first().unwrap().0 >= -layout.width / 2.0 + 15.9);
             assert!(boxes.last().unwrap().1 <= layout.width / 2.0 - 15.9);
-            assert!(boxes.windows(2).all(|pair| pair[1].0 - pair[0].1 >= 6.9), "组件不能挤在一起：{layout:?}");
+            assert!(boxes.windows(2).all(|pair| pair[1].0 - pair[0].1 >= 5.9), "组件不能挤在一起：{layout:?}");
             assert_eq!(layout.clearance(CLOCK), 1.0);
-        } } } } }
+        } } } } } }
+    }
+    #[test]
+    fn cpu_and_mem_are_independent_fixed_width_slots() {
+        let both = Layout::new(false, false, false, false, false, true, true, false);
+        let cpu_only = Layout::new(false, false, false, false, false, true, false, false);
+        let mem_only = Layout::new(false, false, false, false, false, false, true, false);
+        assert!(both.x[CPU].is_some() && both.x[MEM].is_some());
+        assert!(cpu_only.x[CPU].is_some() && cpu_only.x[MEM].is_none());
+        assert!(mem_only.x[MEM].is_some() && mem_only.x[CPU].is_none());
+        assert_eq!(both.widths[CPU], WIDTHS[CPU]);
+        assert_eq!(both.widths[MEM], WIDTHS[MEM]);
+        assert!(both.x[CPU].unwrap() < both.x[MEM].unwrap());
+        assert!((both.width - cpu_only.width - (WIDTHS[CPU] + GAP)).abs() < 0.01, "恰好少一个槽宽加间距");
+    }
+    #[test]
+    fn netspeed_slot_is_fixed_width_and_toggles_cleanly() {
+        let off = Layout::new(true, true, true, false, true, true, true, false);
+        let on = Layout::new(true, true, true, false, true, true, true, true);
+        assert!(off.x[NETSPEED].is_none());
+        assert!(on.x[NETSPEED].is_some());
+        assert_eq!(on.widths[NETSPEED], WIDTHS[NETSPEED]);
+        assert!((on.width - off.width - (WIDTHS[NETSPEED] + GAP)).abs() < 0.01, "恰好多一个槽宽加间距");
+        let mut motion = Motion::default();
+        motion.step(on, 0.0, false);
+        assert!(motion.settled());
     }
     #[test]
     fn replacing_battery_moves_continuously_and_supports_an_instant_state() {
-        let before = Layout::new(true, true, false, false, true, false);
-        let after = Layout::new(false, true, false, false, true, false);
+        let before = Layout::new(true, true, false, false, true, false, false, false);
+        let after = Layout::new(false, true, false, false, true, false, false, false);
         let mut motion = Motion::default();
         motion.step(before.clone(), 0.0, true);
         motion.step(after.clone(), 1.0 / 60.0, true);
