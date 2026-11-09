@@ -502,6 +502,8 @@ pub struct App {
     /// CPU / 内存的平滑显示值（0..100），让圆环填充有「量感」。
     cpu_shown: f32,
     mem_shown: f32,
+    /// 网速（字节每秒，已在采样层做过 EMA 平滑）；设置预览与录制器需要读取。
+    pub(crate) netspeed: crate::netmon::NetSpeed,
 }
 
 impl App {
@@ -568,7 +570,7 @@ impl App {
             bt_shown: Vec::new(),
             bt_initialized: false,
             updates: Default::default(),
-            resident: Default::default(), resident_power:(None,false), sysmon: Default::default(), cpu_shown: 0.0, mem_shown: 0.0,
+            resident: Default::default(), resident_power:(None,false), sysmon: Default::default(), cpu_shown: 0.0, mem_shown: 0.0, netspeed: Default::default(),
         };
         if std::env::var("CAPSULEDOCK_DEBUG_OPEN_SETTINGS").is_ok() { app.open_settings(); }
         app
@@ -577,6 +579,11 @@ impl App {
     pub fn say(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), self.t));
         self.toast_below = false;
+    }
+
+    /// 演示录制器 / 回归测试注入合成网速（字节每秒）；注入后不再读取系统计数器。
+    pub fn set_netspeed(&mut self, down: f64, up: f64) {
+        self.netspeed.set_synthetic(down, up);
     }
 
     /// v0.5.4：把系统音量与蓝牙设备状态同步进界面；只在连接/断开时提示一次。
@@ -835,7 +842,7 @@ impl App {
         self.update_media(env,&ctx);
         let bell=self.t<self.notices.notification_bell_until&&!self.compact_notices();
         self.resident_power=(env.battery,env.charging);
-        let mut layout=Layout::new(self.settings.show_battery&&env.battery.is_some(),self.media.is_music()&&!bell,self.pomo.running,bell,self.pet_enabled(),self.settings.show_sysmon);
+        let mut layout=Layout::new(self.settings.show_battery&&env.battery.is_some(),self.media.is_music()&&!bell,self.pomo.running,bell,self.pet_enabled(),self.settings.show_cpu,self.settings.show_mem,self.settings.show_netspeed);
         layout.reorder(&self.settings.resident_order);
         if self.settings.clock_period!=0 { layout.widen_clock(40.0); }
         if self.pet_enabled() {
@@ -1363,18 +1370,24 @@ impl App {
         let clock = self.settings.clock_text(&env.clock);
         let show_battery=self.settings.show_battery && env.battery.is_some();
 
-        // 顶栏终点布局：[电池][日期][时钟][状态] 作为一组整体居中
+        // 顶栏终点布局：[电池][日期][时钟][CPU][内存][网速] 作为一组整体居中。
+        // 可选组件的前导间距与药丸态共用 bar::GAP，关闭时连间距一起消失，避免留下空档。
+        // 槽宽统一取 bar::WIDTHS，与药丸态布局、设置预览共用一份，避免三处硬编码漂移。
         let date_w = base.text_w(&env.date, size::DATE, W::Regular);
         let clock_w = paint::clock_width(base,&clock,size::CLOCK);
         let battery_space=if show_battery {24.0}else{0.0};
-        let sysmon_w = if self.settings.show_sysmon {36.0}else{0.0};
-        let group = battery_space + date_w + 8.0 + clock_w + if self.settings.show_sysmon {8.0 + sysmon_w}else{0.0};
+        let cpu_slot_w = if self.settings.show_cpu {bar::GAP + bar::WIDTHS[bar::CPU]}else{0.0};
+        let mem_slot_w = if self.settings.show_mem {bar::GAP + bar::WIDTHS[bar::MEM]}else{0.0};
+        let net_slot_w = if self.settings.show_netspeed {bar::GAP + bar::WIDTHS[bar::NETSPEED]}else{0.0};
+        let group = battery_space + date_w + 8.0 + clock_w + cpu_slot_w + mem_slot_w + net_slot_w;
         let gx = local_cx - group / 2.0 + if show_battery {6.0}else{0.0};
         let hb = (gx + 8.5, 18.6);
         let hd = gx + battery_space;
         let hc = hd + date_w + 8.0;
-        let hs_left = hc + clock_w + 8.0;
-        let hs_center = hs_left + sysmon_w / 2.0;
+        let clock_right = hc + clock_w;
+        let hcpu_center = clock_right + bar::GAP + bar::WIDTHS[bar::CPU] / 2.0;
+        let hmem_center = clock_right + cpu_slot_w + bar::GAP + bar::WIDTHS[bar::MEM] / 2.0;
+        let hn_center = clock_right + cpu_slot_w + mem_slot_w + bar::GAP + bar::WIDTHS[bar::NETSPEED] / 2.0;
         // 药丸起点布局
         let has_music=self.media.is_music();
         let layout=self.resident.current();
@@ -1383,7 +1396,8 @@ impl App {
 
         if self.effective_minimal() && self.t>=self.notices.notification_bell_until && p < 0.02 { return; }
         // 电池：位置/大小连续插值
-        let bk = lerp(1.0, 0.8, m);
+        // 展开后与 CPU / 内存环等大（8.2 * 0.88 ≈ 7.2），三个环并排时不会一大两小。
+        let bk = lerp(1.0, 0.88, m);
         let bpos = (lerp(pb.0, hb.0, m), lerp(pb.1, hb.1, m));
         if show_battery {paint::battery(&base.faded(lerp(layout.clearance(bar::BATTERY),1.0,m)), bpos.0, bpos.1, env.battery, env.charging, bk);}
 
@@ -1401,18 +1415,45 @@ impl App {
         if reveal > 0.0 {
             base.faded(reveal).text(hd + (1.0 - reveal) * 10.0, 22.5, &env.date, size::DATE, W::Regular, Color32::from_rgb(210, 210, 214), H::Left);
         }
-        // 系统状态：CPU / 内存双圆环，紧邻时钟（药丸里在时钟与音乐之间）。
-        if self.settings.show_sysmon {
-            if let Some(slot_x) = layout.x[bar::SYSMON] {
-                let sx = lerp(local_cx + slot_x, hs_center, m);
+        // CPU 占用圆环：与内存各自占一个槽位，可单独开关、单独排序。
+        if self.settings.show_cpu {
+            if let Some(slot_x) = layout.x[bar::CPU] {
+                let sx = lerp(local_cx + slot_x, hcpu_center, m);
                 let sy = lerp(15.0, 18.0, m);
-                let a = lerp(layout.clearance(bar::SYSMON), 1.0, m).clamp(0.0, 1.0);
-                self.draw_sysmon(&base.faded(a), sx, sy);
-                base.hit(sx - 17.0, sy - 9.0, 34.0, 18.0, "sysmon")
+                let a = lerp(layout.clearance(bar::CPU), 1.0, m).clamp(0.0, 1.0);
+                self.draw_usage_ring(&base.faded(a), sx, sy, 0);
+                base.hit(sx - bar::WIDTHS[bar::CPU] / 2.0, sy - 9.0, bar::WIDTHS[bar::CPU], 18.0, "cpu")
                     .on_hover_ui(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(Color32::from_rgb(80, 200, 230), format!("CPU {:.0}%", self.cpu_shown));
-                            ui.colored_label(Color32::from_rgb(235, 120, 200), format!("MEM {:.0}%", self.mem_shown));
+                        ui.colored_label(Color32::from_rgb(80, 200, 230), format!("CPU {:.0}%", self.cpu_shown));
+                    });
+            }
+        }
+        // 内存占用圆环：紧邻 CPU，但顺序可由用户拖动改变。
+        if self.settings.show_mem {
+            if let Some(slot_x) = layout.x[bar::MEM] {
+                let sx = lerp(local_cx + slot_x, hmem_center, m);
+                let sy = lerp(15.0, 18.0, m);
+                let a = lerp(layout.clearance(bar::MEM), 1.0, m).clamp(0.0, 1.0);
+                self.draw_usage_ring(&base.faded(a), sx, sy, 1);
+                base.hit(sx - bar::WIDTHS[bar::MEM] / 2.0, sy - 9.0, bar::WIDTHS[bar::MEM], 18.0, "mem")
+                    .on_hover_ui(|ui| {
+                        ui.colored_label(Color32::from_rgb(235, 120, 200), format!("MEM {:.0}%", self.mem_shown));
+                    });
+            }
+        }
+        // 网速：下载 / 上传单行横排，药丸里紧跟系统状态，展开后飞到顶栏组末尾。
+        if self.settings.show_netspeed {
+            if let Some(slot_x) = layout.x[bar::NETSPEED] {
+                let nx = lerp(local_cx + slot_x, hn_center, m);
+                let ny = lerp(15.0, 18.0, m);
+                let a = lerp(layout.clearance(bar::NETSPEED), 1.0, m).clamp(0.0, 1.0);
+                paint::netspeed(&base.faded(a), nx, ny, self.netspeed.down, self.netspeed.up);
+                base.hit(nx - bar::WIDTHS[bar::NETSPEED] / 2.0, ny - 10.0, bar::WIDTHS[bar::NETSPEED], 20.0, "netspeed")
+                    .on_hover_ui(|ui| {
+                        ui.vertical(|ui| {
+                            ui.colored_label(Color32::from_rgb(120, 205, 235), format!("下载 {}/s", crate::netmon::format_rate(self.netspeed.down)));
+                            ui.colored_label(Color32::from_rgb(235, 170, 135), format!("上传 {}/s", crate::netmon::format_rate(self.netspeed.up)));
+                            ui.label("默认路由网卡 · 含局域网流量");
                         });
                     });
             }
@@ -1435,35 +1476,43 @@ impl App {
 
     /// 常驻内容：顶部停靠走共享元素过渡（药丸里的电池、时钟飞到顶栏）；
     /// 左右停靠时竖排内容随展开淡出，顶栏随面板内容淡入。
-    /// 系统状态：CPU / 内存双圆环，圆心放两位数字。
-    /// 底环用类型色区分（CPU 青 / MEM 粉）；进度弧正常用类型色，偏高/危险时切告警色（琥珀→红）。
+    /// 占用圆环：CPU / 内存各自一组「单环 + 环外百分比」，环内只放一个字母（C / M）。
+    /// 底环改中性暗灰细线，让亮弧成为唯一焦点；进度弧正常用类型色，偏高/危险时切告警色（琥珀→红），
+    /// 环内字母固定类型色、环外百分比固定白色，阈值变化不会让文字跟着闪烁。
     ///
-    /// `k` 是圆环自身的本地缩放系数，只用来让半径、线宽、间距、字号整体联动，
-    /// 便于单独微调圆环相对其他组件的比例。坞体大小（80%–140%）不在这里处理：
-    /// 它由 `eframe::set_root_viewport_scale` 在视口层统一放大整个画布，绘制阶段的
-    /// 坐标一律是逻辑单位。因此这里**不要**乘 `Settings::island_scale()`，
-    /// 否则圆环会被缩放两次。
-    fn draw_sysmon(&self, c: &Card, cx: f32, cy: f32) {
+    /// `k` 是圆环自身的本地缩放系数，只用来让半径、线宽、字号整体联动。
+    /// 坞体大小（80%–140%）不在这里处理：它由 `eframe::set_root_viewport_scale`
+    /// 在视口层统一放大整个画布，绘制阶段的坐标一律是逻辑单位。因此这里**不要**
+    /// 乘 `Settings::island_scale()`，否则圆环会被缩放两次。
+    /// 单个占用圆环：0 = CPU（青），1 = 内存（粉）。两个组件各自调用，互不依赖。
+    pub(crate) fn draw_usage_ring(&self, c: &Card, cx: f32, cy: f32, kind: usize) {
         let k = 1.0;
-        let r = 8.2 * k;
-        let w = 2.6 * k;
-        let off = 11.0 * k;
-        // (圆心 x 偏移, 显示值, 类型)：0 = CPU（青），1 = MEM（粉）
-        let items = [(-off, self.cpu_shown, 0usize), (off, self.mem_shown, 1usize)];
-        for &(dx, val, kind) in &items {
-            let frac = ((val / 100.0).clamp(0.0, 1.0)).max(0.02);
-            let col = Self::sysmon_arc(kind, val);
-            // 底环（轨道）：类型色半透明，与电量圆环一致的视觉语言
-            c.ring(cx + dx, cy, r, w, crate::paint::alpha(col, 0.22));
-            let a0 = -std::f32::consts::FRAC_PI_2;
-            // 进度弧：从正上方顺时针；满进度画完整环，否则画弧
-            if frac >= 0.999 {
-                c.ring(cx + dx, cy, r, w, col);
-            } else {
-                c.arc(cx + dx, cy, r, a0, a0 + std::f32::consts::TAU * frac, w, col);
-            }
-            c.centered_text(cx + dx, cy, &format!("{:.0}", val.min(100.0)), 6.6 * k, W::Bold, col, H::Center);
+        // 环比旧版略小、百分比放大到接近时钟的字级；槽宽按两位数百分比定，四字符时缩字号。
+        let r = 7.2 * k;
+        let w = 2.0 * k;
+        let val = if kind == 0 { self.cpu_shown } else { self.mem_shown };
+        let frac = ((val / 100.0).clamp(0.0, 1.0)).max(0.02);
+        let type_col = Self::sysmon_type(kind);
+        let arc_col = Self::sysmon_arc(kind, val);
+        // 环贴槽左侧，右侧留给百分比；槽宽固定，数值变长只向右延伸，不会撑宽坞体。
+        // 槽宽按两位数百分比定，100% 时由 fit_shrink 缩字号而不是裁成省略号。
+        let slot = if kind == 0 { bar::CPU } else { bar::MEM };
+        let half = bar::WIDTHS[slot] / 2.0;
+        let ring_x = cx - half + r + 1.0;
+        c.ring(ring_x, cy, r, w, Color32::from_white_alpha(36));
+        let a0 = -std::f32::consts::FRAC_PI_2;
+        // 进度弧：从正上方顺时针；满进度画完整环，否则画弧
+        if frac >= 0.999 {
+            c.ring(ring_x, cy, r, w, arc_col);
+        } else {
+            c.arc(ring_x, cy, r, a0, a0 + std::f32::consts::TAU * frac, w, arc_col);
         }
+        c.centered_text(ring_x, cy, if kind == 0 { "C" } else { "M" }, 8.5 * k, W::Bold, type_col, H::Center);
+        // 百分比：左对齐紧跟环，白色 11 号；四字符（100%）时等比缩字号，保持完整可读。
+        let text_x = ring_x + r + 2.5;
+        let label = format!("{:.0}%", val.min(100.0));
+        let (fitted, text_size) = c.fit_shrink(&label, 11.0 * k, W::Semibold, cx + half - text_x - 1.0, 8.5 * k);
+        c.centered_text(text_x, cy, &fitted, text_size, W::Semibold, theme::WHITE, H::Left);
     }
 
     /// 类型色：0 = CPU（青），1 = MEM（粉），用于一眼区分两个圆环。
@@ -1645,6 +1694,13 @@ impl App {
         self.sysmon.sample_if_ready(std::time::Duration::from_secs(2));
         self.cpu_shown = anim::approach(self.cpu_shown, self.sysmon.cpu, 4.0, dt);
         self.mem_shown = anim::approach(self.mem_shown, self.sysmon.mem, 4.0, dt);
+        // 网速：约 1 秒一次，只统计默认路由网卡；关闭时停采样并清空基线，
+        // 重新打开后从 0 开始，不会闪一下上次留下的旧读数。
+        if self.settings.show_netspeed {
+            self.netspeed.sample_if_ready(crate::netmon::DEFAULT_INTERVAL);
+        } else {
+            self.netspeed.pause();
+        }
         if env.today != self.today {
             self.today = env.today.clone();
         }

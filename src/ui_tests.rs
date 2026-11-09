@@ -2441,6 +2441,101 @@ fn shelf_remove_icon_stays_centered_on_hover_and_preserves_the_file(){
 }
 
 #[test]
+fn netspeed_setting_defaults_off_and_survives_roundtrip(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    assert!(!h.app.settings.show_netspeed,"新组件默认关闭，不打扰老用户");
+    h.app.settings.show_netspeed=true;h.app.settings.save();
+    assert!(crate::model::Settings::load().show_netspeed);
+    h.app.settings.show_netspeed=false;h.app.settings.save();
+    assert!(!crate::model::Settings::load().show_netspeed);
+}
+
+#[test]
+fn resident_order_migrates_legacy_six_slots_to_eight(){
+    use crate::bar_layout::{BATTERY,PET,CLOCK,CPU,MEM,NETSPEED,MUSIC,FOCUS};
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    let old=[FOCUS,MUSIC,CLOCK,CPU,PET,BATTERY];
+    h.app.settings.resident_order=old.to_vec();h.app.settings.save();
+    let loaded=crate::model::Settings::load();
+    assert_eq!(loaded.resident_order.len(),8);
+    assert!(loaded.resident_order.contains(&NETSPEED),"旧排列必须补上网速槽位，否则会被静默重置");
+    assert!(loaded.resident_order.contains(&MEM),"旧排列必须补上内存槽位");
+    let at=|slot|loaded.resident_order.iter().position(|s|*s==slot).unwrap();
+    assert!(at(CLOCK)<at(CPU) && at(CPU)<at(MEM) && at(MEM)<at(NETSPEED),"新槽位依次插在 CPU 之后");
+    for slot in old {assert!(loaded.resident_order.contains(&slot),"原有顺序必须保留");}
+    // 已经是八位的顺序不应被重复迁移。
+    h.app.settings.resident_order=loaded.resident_order.clone();h.app.settings.save();
+    assert_eq!(crate::model::Settings::load().resident_order,loaded.resident_order);
+}
+
+#[test]
+fn resident_order_migrates_seven_slots_by_inserting_mem(){
+    use crate::bar_layout::{BATTERY,PET,CLOCK,CPU,MEM,NETSPEED,MUSIC,FOCUS};
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    let old=[BATTERY,PET,CLOCK,CPU,NETSPEED,MUSIC,FOCUS];
+    h.app.settings.resident_order=old.to_vec();h.app.settings.save();
+    let loaded=crate::model::Settings::load();
+    assert_eq!(loaded.resident_order.len(),8);
+    assert_eq!(loaded.resident_order,[BATTERY,PET,CLOCK,CPU,MEM,NETSPEED,MUSIC,FOCUS]);
+    assert!(crate::bar_layout::valid_order(&loaded.resident_order));
+}
+
+#[test]
+fn legacy_show_sysmon_maps_to_both_new_switches(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    assert!(h.app.settings.show_cpu && h.app.settings.show_mem,"拆分后两个圆环默认都显示");
+    h.app.settings.save();
+    // 模拟老版本配置文件：只有总开关，没有拆分后的字段。
+    std::fs::write(crate::model::config_dir().join("settings.txt"),"show_sysmon=0\n").unwrap();
+    let loaded=crate::model::Settings::load();
+    assert!(!loaded.show_cpu && !loaded.show_mem,"旧总开关关闭时两个圆环都应关闭");
+    // 新字段一旦出现，旧的总开关不再覆盖它们；两个开关彼此独立。
+    h.app.settings.show_cpu=true;h.app.settings.show_mem=false;h.app.settings.save();
+    let loaded=crate::model::Settings::load();
+    assert!(loaded.show_cpu && !loaded.show_mem,"两个开关必须彼此独立");
+}
+
+#[test]
+fn netspeed_component_draws_rates_only_when_enabled(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    let has=|h:&H,text:&str|h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.text()==text));
+    h.app.set_netspeed(1.6*1024.0*1024.0,48.0*1024.0);
+    h.app.settings.show_netspeed=false;
+    h.hover(H::local(209.5,30.0),2.0);
+    assert!(!has(&h,"1.6M"),"关闭时不应绘制网速");
+    h.app.settings.show_netspeed=true;
+    h.hover(H::local(209.5,30.0),2.0);
+    assert!(has(&h,"1.6M")&&has(&h,"48K"),"应画出下行 / 上行两组定长速率");
+}
+
+#[test]
+fn netspeed_rates_share_one_baseline(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    h.app.set_netspeed(1.6*1024.0*1024.0,48.0*1024.0);
+    h.app.settings.show_netspeed=true;
+    h.hover(H::local(209.5,30.0),2.0);
+    let y=|h:&H,text:&str|h.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t) if t.galley.text()==text=>Some(t.visual_bounding_rect().center().y),_=>None}).unwrap();
+    assert!((y(&h,"1.6M")-y(&h,"48K")).abs()<1.0,"下载 / 上传应在同一行横排，而不是上下两行");
+}
+
+#[test]
+fn netspeed_groups_allocate_width_by_actual_text(){
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
+    h.app.settings.show_netspeed=true;
+    let has=|h:&H,text:&str|h.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.text()==text));
+    let x_of=|h:&H,text:&str|h.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t) if t.galley.text()==text=>Some(t.visual_bounding_rect().min.x),_=>None}).unwrap();
+    h.app.set_netspeed(3.0*1024.0,48.0*1024.0);
+    h.hover(H::local(209.5,30.0),2.0);
+    let short=x_of(&h,"48K");
+    h.app.set_netspeed(30.0*1024.0*1024.0,48.0*1024.0);
+    h.hover(H::local(209.5,30.0),2.0);
+    assert!(x_of(&h,"48K")>short+2.0,"下行变长时上行组应右移（按实际宽度分配），而非各占死半槽");
+    h.app.set_netspeed(30.0*1024.0*1024.0,17.0*1024.0);
+    h.hover(H::local(209.5,30.0),2.0);
+    assert!(has(&h,"30M")&&has(&h,"17K"),"高速档也应完整显示，不得裁成省略号");
+}
+
+#[test]
 fn resident_components_can_be_dragged_saved_and_reset(){
     use crate::bar_layout::{CLOCK,BATTERY};
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
@@ -2740,18 +2835,18 @@ fn clock_period_visually_centers_with_digits() {
 }
 
 /// 坞体大小由视口层（`set_root_viewport_scale`）统一缩放，绘制阶段一律是逻辑单位。
-/// 系统状态圆环若再把 `island_scale()` 乘进 `draw_sysmon` 的本地系数 `k`，
+/// 系统状态圆环若再把 `island_scale()` 乘进 `draw_usage_ring` 的本地系数 `k`，
 /// 就会被缩放两次。这里锁住「绘制半径不随 island_size 变化」这个不变量。
 #[test]
 fn sysmon_ring_radius_is_independent_of_island_size() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    // draw_sysmon 里 r = 8.2 * k，k 固定 1.0；线宽 2.6 用来把圆环和普通圆点区分开。
-    const RING_RADIUS: f32 = 8.2;
-    const RING_STROKE: f32 = 2.6;
+    // draw_usage_ring 里 r = 7.2 * k，k 固定 1.0；线宽 2.0 用来把细环和普通圆点区分开。
+    const RING_RADIUS: f32 = 7.2;
+    const RING_STROKE: f32 = 2.0;
     let mut measured: Vec<(u32, Vec<f32>)> = Vec::new();
     for island_size in [80u32, 100, 140] {
         let mut h=H::new();
-        h.app.settings.show_sysmon=true;
+        h.app.settings.show_cpu=true;h.app.settings.show_mem=true;
         h.app.settings.island_size=island_size;
         // 复现 main.rs 每帧做的事：把坞体倍率交给视口层，而不是绘制层。
         eframe::set_root_viewport_scale(h.app.settings.island_scale());
@@ -2769,7 +2864,7 @@ fn sysmon_ring_radius_is_independent_of_island_size() {
             assert!(
                 (radius - RING_RADIUS).abs() < 0.01,
                 "island_size={island_size}% 时圆环半径应为逻辑单位 {RING_RADIUS}（视口层负责缩放），\
-                 实际 {radius}；若这里变成了 {}，说明 island_scale 被重复乘进了 draw_sysmon",
+                 实际 {radius}；若这里变成了 {}，说明 island_scale 被重复乘进了 draw_usage_ring",
                 RING_RADIUS * (*island_size as f32 / 100.0),
             );
         }
@@ -2880,7 +2975,7 @@ fn avoidance_icon_area_stays_one_row_and_scrolls() {
 fn compact_canvas_preserves_panel_and_notice_pixels(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     fn draw(width:f32,page:Option<usize>,notice:bool)->Vec<u8>{
-        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.show_sysmon=false;
+        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.show_cpu=false;h.app.settings.show_mem=false;
         let media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,duration:120.0,..Default::default()};
         h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]晚风吹过了山岗\n[01:00]下一句"));
         if let Some(page)=page{h.app.show_page(page);}
@@ -2917,7 +3012,7 @@ fn compact_canvas_preserves_panel_and_notice_pixels(){
 fn compact_font_atlas_preserves_panel_and_notice_pixels(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     fn draw(texture_side:usize,page:Option<usize>,notice:bool)->Vec<u8>{
-        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.show_sysmon=false;
+        let mut h=H::new();h.app.settings.island_lyrics=true;h.app.settings.show_cpu=false;h.app.settings.show_mem=false;
         let media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,duration:120.0,..Default::default()};
         h.app.set_lyrics("Track","Artist",120.0,crate::lyrics::parse_lrc("[00:00]晚风吹过了山岗\n[01:00]下一句"));
         if let Some(page)=page{h.app.show_page(page);}
