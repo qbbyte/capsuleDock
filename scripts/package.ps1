@@ -17,13 +17,7 @@ try {
     $binary = Get-Item -LiteralPath $Executable
     & (Join-Path $PSScriptRoot 'check-runtime.ps1') -Executable $binary.FullName
     if ($binary.VersionInfo.FileVersion -ne $version -and $binary.VersionInfo.FileVersion -ne "$version.0") { throw 'Executable version mismatch' }
-    if (-not $NsisCompiler) {
-        $compiler = Get-Command makensis.exe -ErrorAction SilentlyContinue
-        if ($compiler) { $NsisCompiler = $compiler.Source }
-        elseif ($env:NSIS_HOME) { $NsisCompiler = Join-Path $env:NSIS_HOME 'makensis.exe' }
-        else { $NsisCompiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe' }
-    }
-    if (-not (Test-Path -LiteralPath $NsisCompiler)) { throw 'NSIS compiler not found; install NSIS or pass -NsisCompiler' }
+    $NsisCompiler = & (Join-Path $PSScriptRoot 'find-nsis.ps1') -NsisCompiler $NsisCompiler
     $packageName = "CapsuleDock-v$version-windows-x64"
     if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'dist' }
     $outputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
@@ -36,7 +30,8 @@ try {
         Copy-Item -LiteralPath (Join-Path $projectRoot $_) -Destination $stagingDirectory -Recurse
     }
     $setup = Join-Path $outputDirectory "CapsuleDock-Setup-v$version-x64.exe"
-    & $NsisCompiler /V2 /WX "/DAPP_VERSION=$version" "/DPROJECT_DIR=$projectRoot" "/DSOURCE_EXE=$($binary.FullName)" "/DOUTPUT_FILE=$setup" (Join-Path $projectRoot 'installer\setup.nsi')
+    # /INPUTCHARSET 让脚本没有 BOM 也按 UTF-8 读，避免中文文案按系统代码页编译成乱码。
+    & $NsisCompiler /V2 /WX /INPUTCHARSET UTF8 "/DAPP_VERSION=$version" "/DPROJECT_DIR=$projectRoot" "/DSOURCE_EXE=$($binary.FullName)" "/DOUTPUT_FILE=$setup" (Join-Path $projectRoot 'installer\setup.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
     $archive = Join-Path $outputDirectory "$packageName.zip"
     Compress-Archive -LiteralPath $stagingDirectory -DestinationPath $archive

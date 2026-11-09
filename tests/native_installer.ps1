@@ -15,7 +15,7 @@ $fixture = Join-Path $root 'fixture.exe'
 & (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') /nologo /target:winexe "/out:$fixture" $source
 if ($LASTEXITCODE -ne 0) { throw '测试程序编译失败' }
 $setup = Join-Path $root 'CapsuleDock-TestInstaller.exe'
-& $NsisCompiler /V2 /WX "/DAPP_ID=$id" "/DAPP_NAME=$name" /DAPP_VERSION=9.8.7 "/DPROJECT_DIR=$project" "/DSOURCE_EXE=$fixture" "/DOUTPUT_FILE=$setup" (Join-Path $project 'installer\setup.nsi')
+& $NsisCompiler /V2 /WX /INPUTCHARSET UTF8 "/DAPP_ID=$id" "/DAPP_NAME=$name" /DAPP_VERSION=9.8.7 "/DPROJECT_DIR=$project" "/DSOURCE_EXE=$fixture" "/DOUTPUT_FILE=$setup" (Join-Path $project 'installer\setup.nsi')
 if ($LASTEXITCODE -ne 0) { throw '测试安装器编译失败' }
 New-Item -ItemType Directory -Path $data -Force | Out-Null
 Set-Content -LiteralPath $sentinel -Value 'keep-user-data'

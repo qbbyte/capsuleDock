@@ -42,7 +42,7 @@ jobs:
             "NSIS_HOME=$(Split-Path $compiler -Parent)" >> $env:GITHUB_ENV
           } catch {
             Write-Warning "NSIS 下载失败，改用 Chocolatey：$($_.Exception.Message)"
-            choco install nsis --no-progress -y
+            choco install nsis --version=3.13.0 --no-progress -y
           }
 
       - name: 读取版本
@@ -54,6 +54,9 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
             throw "标签 $env:GITHUB_REF_NAME 与 Cargo.toml 版本 v$v 不一致"
           }
+
+      - name: 发布前检查
+        run: pwsh -NoProfile -File scripts/verify.ps1
 
       - name: 打包安装程序
         run: pwsh -NoProfile -File scripts/package.ps1

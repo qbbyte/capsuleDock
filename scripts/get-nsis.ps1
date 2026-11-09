@@ -1,5 +1,6 @@
-param([Parameter(Mandatory=$true)][string]$Directory)
+﻿param([Parameter(Mandatory=$true)][string]$Directory)
 $ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force -Path $Directory | Out-Null
 $archive = Join-Path $Directory 'nsis-3.13.zip'
 Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $archive
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne 'ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8') {

@@ -1,4 +1,4 @@
-# 使用独立目录和最小测试程序验证更新，不启动或替换日常使用的胶囊坞。
+﻿# 使用独立目录和最小测试程序验证更新，不启动或替换日常使用的胶囊坞。
 param([switch]$EncryptedCache)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
@@ -23,6 +23,8 @@ try {
     $data = Join-Path $targetDir 'settings.json'
     Set-Content -LiteralPath $data -Value 'keep-user-data'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # ZipArchiveMode 在另一个程序集里，Windows PowerShell 5.1 不会自动加载。
+    if (-not ('System.IO.Compression.ZipArchiveMode' -as [type])) { Add-Type -AssemblyName System.IO.Compression }
     foreach ($case in @('success','inherited-shell','bad-hash','wrong-version','traversal')) {
         Remove-Item -LiteralPath (Join-Path $targetDir 'started.txt') -ErrorAction SilentlyContinue
         Set-Content -LiteralPath $target -Value 'previous-program'

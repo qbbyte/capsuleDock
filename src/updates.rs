@@ -321,7 +321,9 @@ fn download(release: &Release, tx: &mpsc::Sender<Event>, cancel: &AtomicBool) ->
         let mut input = response.into_reader();
         let mut output = std::fs::File::create(work.join("update.zip")).map_err(|_| "无法保存更新包")?;
         transfer(&mut input, &mut output, package, cancel, |progress| { let _ = tx.send(Event::Progress(progress)); })?;
-        std::fs::write(work.join("apply.ps1"), concat!("\u{feff}", include_str!("../installer/update.ps1"))).map_err(|_| "无法准备更新程序")?;
+        // update.ps1 自带 BOM，include_str! 会原样保留，所以先剥掉再补一个，避免写出双 BOM 的脚本。
+        let script = include_str!("../installer/update.ps1").trim_start_matches('\u{feff}');
+        std::fs::write(work.join("apply.ps1"), format!("\u{feff}{script}")).map_err(|_| "无法准备更新程序")?;
         std::fs::write(work.join("version.txt"), release.version.trim_start_matches('v')).map_err(|_| "无法保存更新信息")?;
         std::fs::write(work.join("hash.txt"), &package.hash).map_err(|_| "无法保存校验信息")?;
         if cancel.load(Ordering::Relaxed) { return Err("下载已取消".into()); }
@@ -481,6 +483,13 @@ mod tests {
             let mut invalid = value.clone(); invalid["assets"][0][field] = bad;
             assert!(release_info(&invalid, "0.6.39").unwrap().unwrap().package.is_none());
         }
+    }
+    #[test]
+    fn embedded_update_script_carries_exactly_one_bom() {
+        // 更新脚本交给 powershell 5.1 执行，它只按系统代码页读没有 BOM 的 UTF-8；双 BOM 会让脚本开头多出一个字符。
+        let script = include_str!("../installer/update.ps1");
+        assert!(script.starts_with('\u{feff}'), "installer/update.ps1 需要 UTF-8 BOM");
+        assert!(!script.strip_prefix('\u{feff}').unwrap().starts_with('\u{feff}'), "installer/update.ps1 不能有两个 BOM");
     }
     #[test]
     fn download_rejects_truncation_corruption_excess_and_cancellation() {

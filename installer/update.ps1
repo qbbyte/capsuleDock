@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$WorkPath, [Parameter(Mandatory=$true)][string]$TargetExe, [int]$ParentProcessId)
+﻿param([Parameter(Mandatory=$true)][string]$WorkPath, [Parameter(Mandatory=$true)][string]$TargetExe, [int]$ParentProcessId)
 $ErrorActionPreference = 'Stop'
 # 更新只使用当前 PowerShell 自带模块，避免继承其他终端版本的模块路径。
 $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')

@@ -1,4 +1,4 @@
-﻿﻿$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 $installDir=[System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\CapsuleDock'))
 if([System.IO.Path]::GetFullPath($PSScriptRoot) -ne $installDir){throw '卸载脚本只能在胶囊坞安装目录中运行。'}
 $exePath=Join-Path $installDir 'capsuledock.exe'
