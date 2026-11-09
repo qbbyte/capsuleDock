@@ -122,6 +122,18 @@ impl<'a> Card<'a> {
         chars[..low].iter().collect::<String>() + "…"
     }
 
+    /// 超宽时优先等比缩小字号（不低于 `min_size`），仍放不下才交给 `fit` 加省略号。
+    /// 返回 (文本, 实际字号)：常见两位数保持原字号，四字符（100%）自动缩小。
+    /// 调用方把 `min_size` 设得足够小即可保证「宁可字小也不省略」。
+    /// 网速不走这里：两组速率由 `netspeed_alloc` 动态分配宽度并统一缩字号，永不裁剪。
+    pub fn fit_shrink(&self, t: &str, size: f32, w: W, max_w: f32, min_size: f32) -> (String, f32) {
+        let full = self.text_w(t, size, w);
+        if full <= max_w { return (t.to_owned(), size); }
+        // 留 0.5 逻辑单位余量，避免浮点误差把刚好放得下的文本裁成 "1.6…"。
+        let scaled = (size * (max_w - 0.5).max(1.0) / full).max(min_size);
+        (self.fit(t, scaled, w, max_w), scaled)
+    }
+
     /// 按宽度折行，最多 `max_lines` 行，还有剩余内容时最后一行加省略号。
     pub fn wrap(&self, t: &str, size: f32, w: W, max_w: f32, max_lines: usize) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -380,6 +392,84 @@ pub fn chevron(c: &Card, x: f32, y: f32, dir: f32, hover: f32, press: f32) {
     c.path(&[(cx - dir * s * 0.75, y - s), (cx + dir * s * 0.45, y), (cx - dir * s * 0.75, y + s)], 1.6, Color32::WHITE);
 }
 
+/// 网速：一行两组「箭头 + 速率」；`down` / `up` 单位为字节每秒。
+/// 箭头用线段画（短杆 + V 形头），不依赖字体里的 ▲▼ 字形；只有箭头带类型色，
+/// 速率文本用中性白，避免两组彩色小字在坞上抢注意力。
+/// 坐标一律是逻辑单位（缩放交给视口层）。
+/// 两组不再各占死半槽：按各自文本实际宽度分配，短的一组把富余宽度让给长的一组，
+/// 整组在固定槽宽内水平居中。两组共用同一字号，文本永远原样绘制、不会裁省略号；
+/// 槽宽不变所以坞体不抖，只有第二组起点会随下行位数左右微移（组内抖动）。
+const NETSPEED_LEAD: f32 = 7.0;  // 组起点 → 文本左缘；箭头占 x+0.4 .. x+5.6
+const NETSPEED_TAIL: f32 = 1.0;  // 文本右侧留白
+const NETSPEED_MID: f32 = 5.0;   // 两组之间的间隔
+const NETSPEED_FIXED: f32 = 2.0 * (NETSPEED_LEAD + NETSPEED_TAIL) + NETSPEED_MID;
+const NETSPEED_BASE: f32 = 11.0;
+/// 防御性下限：4 字符格式下两组都最长约 7.6 号，永远不会触及。
+const NETSPEED_MIN: f32 = 4.0;
+
+/// 按两组在 `NETSPEED_BASE` 字号下测得的宽度求 (统一字号, 组0 x, 组1 x)，x 相对槽中心。
+/// 文本宽度按字号线性缩放，槽内另留 1 逻辑余量吸收字体 hinting 误差。
+fn netspeed_alloc(w_down: f32, w_up: f32, slot_w: f32) -> (f32, f32, f32) {
+    let avail = (slot_w - NETSPEED_FIXED - 1.0).max(1.0);
+    let sum = (w_down + w_up).max(1.0);
+    let size = if sum <= avail { NETSPEED_BASE } else { (NETSPEED_BASE * avail / sum).max(NETSPEED_MIN) };
+    let k = size / NETSPEED_BASE;
+    let (d, u) = (w_down * k, w_up * k);
+    let x0 = -(NETSPEED_FIXED + d + u) / 2.0;
+    let x1 = x0 + NETSPEED_LEAD + d + NETSPEED_TAIL + NETSPEED_MID;
+    (size, x0, x1)
+}
+
+pub fn netspeed(c: &Card, cx: f32, cy: f32, down: f64, up: f64) {
+    let labels = [crate::netmon::format_rate(down), crate::netmon::format_rate(up)];
+    let w_down = c.text_w(&labels[0], NETSPEED_BASE, W::Semibold);
+    let w_up = c.text_w(&labels[1], NETSPEED_BASE, W::Semibold);
+    let slot_w = crate::bar_layout::WIDTHS[crate::bar_layout::NETSPEED];
+    let (size, off0, off1) = netspeed_alloc(w_down, w_up, slot_w);
+    let colors = [Color32::from_rgb(120, 205, 235), Color32::from_rgb(235, 170, 135)];
+    for (i, x) in [cx + off0, cx + off1].iter().copied().enumerate() {
+        let ax = x + 3.0;
+        let (tip, wing, rod) = if i == 0 { (cy + 2.5, cy - 1.0, cy - 4.0) } else { (cy - 2.5, cy + 1.0, cy + 4.0) };
+        c.seg((ax, rod), (ax, tip), 1.2, colors[i]);
+        c.seg((ax - 2.6, wing), (ax, tip), 1.2, colors[i]);
+        c.seg((ax, tip), (ax + 2.6, wing), 1.2, colors[i]);
+        // 原样绘制：长数值只让两组一起缩字号，绝不变成 "30…"。
+        c.centered_text(x + NETSPEED_LEAD, cy, &labels[i], size, W::Semibold, theme::WHITE, H::Left);
+    }
+}
+
+#[cfg(test)]
+mod netspeed_tests {
+    use super::*;
+
+    #[test]
+    fn short_group_hands_spare_width_to_the_long_one() {
+        let slot = crate::bar_layout::WIDTHS[crate::bar_layout::NETSPEED];
+        let (short_size, _, x1_short) = netspeed_alloc(13.0, 13.0, slot);
+        let (long_size, long_x0, x1_long) = netspeed_alloc(26.0, 13.0, slot);
+        assert_eq!(short_size, NETSPEED_BASE);
+        assert_eq!(long_size, NETSPEED_BASE, "一长一短无需缩字号");
+        assert!(x1_long > x1_short + 2.0, "下行变长时上行组应右移，而不是各占死半槽");
+        let total = NETSPEED_FIXED + 26.0 + 13.0;
+        assert!((long_x0 + total / 2.0).abs() < 0.01, "整组应在槽内水平居中");
+    }
+
+    #[test]
+    fn both_groups_long_stay_inside_the_slot() {
+        let slot = crate::bar_layout::WIDTHS[crate::bar_layout::NETSPEED];
+        for (d, u) in [(27.0, 27.0), (40.0, 40.0), (1.0, 1.0)] {
+            let (size, x0, x1) = netspeed_alloc(d, u, slot);
+            let k = size / NETSPEED_BASE;
+            let right = x1 + NETSPEED_LEAD + u * k + NETSPEED_TAIL;
+            assert!(size <= NETSPEED_BASE && size >= NETSPEED_MIN);
+            assert!(x0 >= -slot / 2.0 - 0.01 && right <= slot / 2.0 + 0.01, "整组不得越出槽：{d}/{u}");
+            assert!(x1 > x0 + NETSPEED_LEAD + d * k, "两组不得重叠");
+        }
+        let (size, _, _) = netspeed_alloc(27.0, 27.0, slot);
+        assert!(size < NETSPEED_BASE, "两组都长时应统一缩字号，而不是各缩各的");
+    }
+}
+
 /// 电池环：充电绿色 + 闪电；低电量红色；否则灰色并显示百分比弧。
 pub fn battery(c: &Card, cx: f32, cy: f32, pct: Option<u8>, charging: bool, k: f32) {
     let r = 8.2 * k;
@@ -392,7 +482,9 @@ pub fn battery(c: &Card, cx: f32, cy: f32, pct: Option<u8>, charging: bool, k: f
     } else {
         Color32::from_rgb(220, 220, 224)
     };
-    c.ring(cx, cy, r, w, alpha(col, 0.22));
+    // 底环用中性灰，和 CPU / 内存环同一套视觉语言：低电量或充电时也能看清圆环轮廓，
+    // 不会只剩顶部一小段进度弧、在纯黑展开背景上像「断线」。
+    c.ring(cx, cy, r, w, Color32::from_white_alpha(38));
     let a0 = -FRAC_PI_2;
     if level >= 0.999 {
         c.ring(cx, cy, r, w, col);

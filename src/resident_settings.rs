@@ -1,14 +1,16 @@
 use crate::{bar_layout::*,paint::{self,Card},theme::{self,W}};
 use eframe::egui::{self,Color32,RichText,Rect,Pos2,Vec2};
 
-pub(crate) fn preview_layout(order:&[usize], sysmon:bool)->Layout {
-    let mut layout=Layout::new(true,true,true,false,true,sysmon);
+/// 预览里把所有可排序组件都摆上：开关只影响「灰显」，不影响占位。
+/// 这样关闭某个组件时顺序仍然保留，也不会出现 `layout.x[slot] == None` 的空位。
+pub(crate) fn preview_layout(order:&[usize])->Layout {
+    let mut layout=Layout::new(true,true,true,false,true,true,true,true);
     layout.reorder(order);layout
 }
 
 impl crate::app::App {
     pub(crate) fn resident_order_settings(&mut self,ui:&mut egui::Ui){
-        let default=if self.settings.show_battery {DEFAULT_ORDER.to_vec()}else{vec![PET,CLOCK,SYSMON,BATTERY,MUSIC,FOCUS]};
+        let default=if self.settings.show_battery {DEFAULT_ORDER.to_vec()}else{vec![PET,CLOCK,CPU,MEM,NETSPEED,BATTERY,MUSIC,FOCUS]};
         let mut order=if valid_order(&self.settings.resident_order){self.settings.resident_order.clone()}else{default.clone()};
         ui.horizontal(|ui|{
             ui.label(RichText::new("拖动坞上的图标").color(ui.visuals().text_color()));
@@ -17,7 +19,7 @@ impl crate::app::App {
             });
         });
         ui.add_space(12.0);
-        let mut layout=preview_layout(&order, self.settings.show_sysmon);
+        let mut layout=preview_layout(&order);
         if self.settings.clock_period!=0 { layout.widen_clock(40.0); }
         let (stage,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),100.0),egui::Sense::hover());
         ui.painter().rect_filled(stage,10.0,Color32::from_rgb(19,25,36));
@@ -44,10 +46,12 @@ impl crate::app::App {
         let pointer=ui.ctx().pointer_interact_pos();
         let dragged=egui::DragAndDrop::payload::<usize>(ui.ctx());
         let mut movement=None;
-        let label=|slot|match slot{CLOCK=>"时间",BATTERY=>"电量",MUSIC=>"音乐",FOCUS=>"专注",_=>"吉祥物"};
+        let label=|slot|match slot{CLOCK=>"时间",BATTERY=>"电量",MUSIC=>"音乐",FOCUS=>"专注",CPU=>"CPU 占用",MEM=>"内存占用",NETSPEED=>"网速",_=>"吉祥物"};
         for (index,&slot) in order.iter().enumerate(){
-            let x=cx+layout.x[slot].unwrap();
-            let width=match slot{CLOCK=>if self.settings.clock_period!=0 {84.0}else{44.0},BATTERY=>20.0,PET=>32.0,MUSIC=>14.0,FOCUS=>crate::focus_bar::WIDTH,_=>0.0};
+            let Some(slot_x)=layout.x[slot] else {continue;};
+            let x=cx+slot_x;
+            // 拖拽热区宽度直接取布局槽宽，避免预览与坞上的组件宽度漂移。
+            let width=match slot{CLOCK=>if self.settings.clock_period!=0 {WIDTHS[CLOCK]+40.0}else{WIDTHS[CLOCK]},BATTERY=>WIDTHS[BATTERY],PET=>WIDTHS[PET],MUSIC=>WIDTHS[MUSIC],FOCUS=>WIDTHS[FOCUS],CPU=>WIDTHS[CPU],MEM=>WIDTHS[MEM],NETSPEED=>WIDTHS[NETSPEED],_=>0.0};
             let left=x-width/2.0;
             let rect=card.rect(left-5.0,1.0,width+10.0,28.0);
             let response=ui.interact(rect,ui.id().with(("resident-icon",slot)),egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
@@ -59,7 +63,7 @@ impl crate::app::App {
             let dx=if is_dragged{pointer.map(|p|((p.x-origin.x)/scale-(left+width/2.0)).clamp(-left,layout.width-left-width)).unwrap_or(0.0)}else{0.0};
             if is_dragged {ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);}
             else if response.hovered(){ui.painter().rect_filled(rect,6.0,Color32::from_white_alpha(18));}
-            let active=match slot{BATTERY=>self.settings.show_battery&&self.resident_power.0.is_some(),PET=>self.settings.pet,MUSIC=>self.media.is_music(),FOCUS=>self.pomo.running,_=>true};
+            let active=match slot{BATTERY=>self.settings.show_battery&&self.resident_power.0.is_some(),PET=>self.settings.pet,MUSIC=>self.media.is_music(),FOCUS=>self.pomo.running,CPU=>self.settings.show_cpu,MEM=>self.settings.show_mem,NETSPEED=>self.settings.show_netspeed,_=>true};
             let c=card.shifted(dx,0.0).faded(if active||is_dragged{1.0}else{0.38}).ghost();
             match slot{
                 BATTERY=>paint::battery(&c,x,15.0,self.resident_power.0,self.resident_power.1,1.0),
@@ -67,6 +71,9 @@ impl crate::app::App {
                 PET=>self.pet.draw(&c,x,self.t),
                 MUSIC=>paint::playback_bars(&c,x,15.0,self.t,self.media.playing,theme::WHITE),
                 FOCUS=>crate::focus_bar::draw(&c,x,15.0,self.t,&self.pomo,self.phase_secs(self.pomo.phase),false),
+                CPU=>self.draw_usage_ring(&c,x,15.0,0),
+                MEM=>self.draw_usage_ring(&c,x,15.0,1),
+                NETSPEED=>paint::netspeed(&c,x,15.0,self.netspeed.down,self.netspeed.up),
                 _=>{},
             }
             if is_dragged {ui.painter().line_segment([Pos2::new(rect.center().x,body.bottom()+6.0),Pos2::new(rect.center().x,body.bottom()+12.0)],egui::Stroke::new(2.0,theme::BLUE));}

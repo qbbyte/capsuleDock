@@ -275,6 +275,9 @@ fn main() {
     let dur = 214.0;
     let lrc = "[00:58.00]把今天折成纸船\n[01:03.50]放进晚风里慢慢走\n[01:08.80]海面亮起一盏灯\n[01:13.60]像谁在远处等候\n[01:19.00]我们不必急着靠岸\n[01:24.40]月光会替我回头\n[01:30.00]把心事交给潮汐\n[01:35.50]明天也会温柔\n[01:41.00]晚风吹过 你的名字\n[01:46.50]轻轻落在 海的尽头\n[01:52.00]每一朵浪花 都在说\n[01:57.50]别害怕 慢慢走\n[02:03.00]我们不必急着靠岸\n[02:08.40]月光会替我回头\n[02:14.00]风停在你的窗口\n[02:19.60]灯火一盏一盏亮透\n[02:25.20]我们沿着海岸线\n[02:30.80]把夏天慢慢走旧\n[02:36.40]晚风吹过 你的名字\n[02:42.00]轻轻落在 海的尽头\n[02:47.60]每一朵浪花 都在说\n[02:53.20]别害怕 慢慢走\n[03:00.00]（间奏）\n[03:20.00]把今天折成纸船\n";
     app.set_lyrics(title, artist, dur, lyrics::parse_lrc(lrc));
+    // 网速走系统计数器，录制器里注入合成值，保证演示画面可复现。
+    app.settings.show_netspeed = true;
+    app.set_netspeed(1.6 * 1024.0 * 1024.0, 48.0 * 1024.0);
     let mut media = Media {
         np: NowPlaying { title: title.into(), artist: artist.into(), playing: false, position: 63.0, duration: dur, ..Default::default() },
         anchor_t: 0.0,
@@ -516,6 +519,8 @@ fn gallery() {
         let ctx=egui::Context::default();
         let mut app=App::new(&ctx,Options{fetch_lyrics:false,pet_idle:45.0});
         app.settings.pet=true;
+        app.settings.show_netspeed = true;
+        app.set_netspeed(1.6 * 1024.0 * 1024.0, 48.0 * 1024.0);
         let mut ras=raster::Raster::new(1280,380);
         let mut rgba=vec![];
         for frame in 0..75 {
