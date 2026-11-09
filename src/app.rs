@@ -18,7 +18,11 @@ use std::path::PathBuf;
 
 // ---------- 几何（逻辑点；原版 125% 截图 ÷ 1.25） ----------
 pub const PW: f32 = 419.0; // 展开面板宽
-pub const PH: f32 = 140.0; // 展开面板高
+/// 展开面板顶部为顶栏预留的安全区高度。页面内容整体下移这么多，
+/// 顶栏（电池 / 日期 / 时钟 / 状态组件 / 齿轮）独占一条，不再压住页面。
+pub(crate) const HEADER_H: f32 = 28.0;
+/// 展开面板高 = 原来的 140 内容区 + 顶部顶栏安全区。
+pub const PH: f32 = 140.0 + HEADER_H; // 展开面板高
 pub const BAR_W: f32 = 163.0; // 收起药丸宽
 pub const BAR_H: f32 = 30.0; // 收起药丸高
 pub(crate) const HUD_W: f32 = 260.0;
@@ -1001,7 +1005,9 @@ impl App {
         let origin = self.content_origin(win);
         let clip = panel.intersect(win);
         let base = Card::new(ui, origin, clip);
-        self.cursor_local = env.cursor.map(|p| base.to_local(p));
+        // 页面内容整体在顶栏安全区之下，光标也换算到同一套内容坐标，
+        // 否则置物架拖入遮罩的光斑会比实际位置高 HEADER_H。
+        self.cursor_local = env.cursor.map(|p| base.shifted(0.0, HEADER_H).to_local(p));
 
         let banner=!self.compact_notices()&&self.notices.notice.is_some()&&!self.morph.open;
         let restoring_lyrics=!self.morph.open&&self.notices.notice.is_none()&&self.island_lyrics_active()&&self.notices.hud_notice.as_ref().is_some_and(|a|a.source!=crate::extras::AlertSource::Internal);
@@ -1062,8 +1068,8 @@ impl App {
         if reveal > 0.004 && !banner && !restoring_lyrics {
             let c = base.shifted(0.0, (1.0 - reveal) * -5.0).faded(reveal);
             let c = if reveal < 0.6 { c.ghost() } else { c };
-            if self.todo.task_dialog.is_some(){self.draw_task_editor(&c);}else{self.panel_body(&c, env, &mut cmds);}
-            if !self.toast_below {self.toast_layer(&c,106.0);}
+            if self.todo.task_dialog.is_some(){self.draw_task_editor(&c.shifted(0.0, HEADER_H));}else{self.panel_body(&c, env, &mut cmds);}
+            if !self.toast_below {self.toast_layer(&c,106.0 + HEADER_H);}
         }
         // 坞下的确认提示使用独立裁剪区域，收起时跟随坞体下沿。
         let floating_toast=if self.toast_below && self.toast.is_some() {
@@ -1075,10 +1081,10 @@ impl App {
             self.toast_layer(&Card::new(ui,toast_origin,win),h+8.0)
         }else{None};
         if (self.todo.adding||self.todo.editing.is_some()) && reveal > 0.9 && self.nav.page == TODO_PAGE && self.page_e() > 0.25 {
-            self.input_field(ui, origin, &mut cmds);
+            self.input_field(ui, origin + Vec2::new(0.0, HEADER_H), &mut cmds);
         }
 
-        if self.todo.task_dialog.is_some() && reveal>0.9 {self.task_editor_inputs(ui,origin,&mut cmds);}
+        if self.todo.task_dialog.is_some() && reveal>0.9 {self.task_editor_inputs(ui,origin + Vec2::new(0.0, HEADER_H),&mut cmds);}
 
         // ---------- 输出 ----------
         let rel = |r: Rect| r.translate(-win.min.to_vec2());
@@ -1572,6 +1578,10 @@ impl App {
         c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
         paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
         if settings.clicked(){self.settings_tab=[1,2,4,3][self.nav.page];self.open_settings();}
+        // 顶栏独占面板顶部 HEADER_H 高的一条安全区：以下内容整体下移，
+        // 展开后不再覆盖日期 / 状态组件，也不会被顶栏压住封面与页标题。
+        let body = c.shifted(0.0, HEADER_H);
+        let c = &body;
         if self.subpage==Some(self.nav.page) {
             c.text(15.0,25.0,"‹",19.0,W::Bold,theme::WHITE,H::Left);
             c.text(37.0,25.0,"专注设置",size::TITLE,W::Bold,theme::WHITE,H::Left);
